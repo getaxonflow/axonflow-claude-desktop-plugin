@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23'
+          check-latest: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l cmd/ runtime-e2e/)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: test (race + coverage)
+        run: |
+          go test ./cmd/... -race -count=1 -coverprofile=coverage.out
+          go tool cover -func=coverage.out | tail -1
+
+      - name: coverage gate (>=80%)
+        run: |
+          pct="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/,"",$3); print $3}')"
+          echo "total coverage: ${pct}%"
+          awk -v p="$pct" 'BEGIN { exit (p+0 >= 80) ? 0 : 1 }' || {
+            echo "coverage ${pct}% is below the 80% gate"; exit 1; }
+
+  cross-compile:
+    name: Multi-arch build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23'
+          check-latest: true
+      - name: build all target binaries
+        run: ./build.sh binaries
+      - name: assert every platform binary exists
+        run: |
+          for f in \
+            build/mcpb/server/axonflow-mcp-proxy-darwin \
+            build/mcpb/server/axonflow-mcp-proxy-linux-amd64 \
+            build/mcpb/server/axonflow-mcp-proxy-linux-arm64 \
+            build/mcpb/server/axonflow-mcp-proxy-windows-amd64.exe; do
+            test -f "$f" || { echo "missing $f"; exit 1; }
+          done
+          echo "all platform binaries present"
