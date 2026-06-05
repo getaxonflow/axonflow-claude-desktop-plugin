@@ -1,0 +1,28 @@
+{
+  "//": "Backend MCP servers the AxonFlow governance proxy fronts. Each entry is",
+  "//id": "a unique slug ([A-Za-z0-9_-]); when more than one backend is listed,",
+  "//ns": "tool names are namespaced as <id>__<tool> to avoid collisions.",
+  "//transport": "Set EITHER command+args+env (stdio: the proxy launches it) OR url (http).",
+  "backends": [
+    {
+      "id": "crm",
+      "command": "node",
+      "args": ["/Users/you/bukuwarung/crm-mcp/server.js"],
+      "env": {
+        "CRM_API_TOKEN": "..."
+      }
+    },
+    {
+      "id": "panacea",
+      "command": "python3",
+      "args": ["-m", "panacea_mcp"],
+      "env": {
+        "PANACEA_BASE_URL": "https://panacea.internal.bukuwarung"
+      }
+    },
+    {
+      "id": "bigquery",
+      "url": "http://127.0.0.1:9100/mcp"
+    }
+  ]
+}

@@ -1,0 +1,139 @@
+{
+  "manifest_version": "0.3",
+  "name": "axonflow-governance",
+  "display_name": "AxonFlow Governance",
+  "version": "0.1.0",
+  "description": "Governs Claude Desktop's MCP tool calls: enforces AxonFlow Decision Mode policy on every call, redacts PII from responses, and audits everything.",
+  "long_description": "AxonFlow Governance is an MCP proxy for Claude Desktop. It fronts your internal MCP servers (CRM, BigQuery, back-office) and, on every `tools/call`, checks the call against AxonFlow Decision Mode (`POST /api/v1/decide`) before forwarding it. Policy-violating calls are blocked, PII is redacted from tool responses before it reaches the conversation, and every call is written to a Layer-1 audit trail with a `decision_id`/`trace_id` for SIEM correlation.\n\nClaude Desktop has no PreToolUse/PostToolUse hooks (those are Claude Code only) \u2014 the MCP layer is the only pre-execution interception point, so enforcement lives in this proxy. The proxy fails CLOSED by default: if the policy service is unreachable, tool calls are blocked.",
+  "author": {
+    "name": "AxonFlow",
+    "email": "hello@getaxonflow.com",
+    "url": "https://getaxonflow.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/getaxonflow/axonflow-claude-desktop-plugin"
+  },
+  "homepage": "https://getaxonflow.com",
+  "license": "MIT",
+  "keywords": [
+    "governance",
+    "security",
+    "pii",
+    "audit",
+    "compliance",
+    "policy-enforcement",
+    "mcp"
+  ],
+  "icon": "assets/logo.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/axonflow-mcp-proxy-darwin",
+    "mcp_config": {
+      "command": "${__dirname}/server/axonflow-mcp-proxy-darwin",
+      "args": [],
+      "env": {
+        "AXONFLOW_ENDPOINT": "${user_config.axonflow_endpoint}",
+        "AXONFLOW_CLIENT_ID": "${user_config.client_id}",
+        "AXONFLOW_CLIENT_SECRET": "${user_config.client_secret}",
+        "AXONFLOW_USER_TOKEN": "${user_config.user_token}",
+        "AXONFLOW_TENANT_ID": "${user_config.tenant_id}",
+        "AXONFLOW_ORG_ID": "${user_config.org_id}",
+        "AXONFLOW_FAIL_MODE": "${user_config.fail_mode}",
+        "AXONFLOW_LEADER_EMAIL": "${user_config.leader_email}",
+        "AXONFLOW_BACKENDS_FILE": "${user_config.backends_file}",
+        "AXONFLOW_AUDIT_LOG": "${user_config.audit_log}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/axonflow-mcp-proxy-windows-amd64.exe"
+        },
+        "linux": {
+          "command": "${__dirname}/server/axonflow-mcp-proxy-linux-amd64"
+        }
+      }
+    }
+  },
+  "tools_generated": true,
+  "user_config": {
+    "axonflow_endpoint": {
+      "type": "string",
+      "title": "AxonFlow endpoint",
+      "description": "Base URL of your AxonFlow Decision API, e.g. https://app.getaxonflow.com:8090",
+      "required": true,
+      "default": "http://localhost:8080"
+    },
+    "client_id": {
+      "type": "string",
+      "title": "Client ID",
+      "description": "AxonFlow client identifier (sent as X-Client-Id).",
+      "required": true,
+      "default": "claude-desktop-proxy"
+    },
+    "client_secret": {
+      "type": "string",
+      "title": "Client secret",
+      "description": "AxonFlow client secret (sent as X-Client-Secret). Leave blank in community mode.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    },
+    "user_token": {
+      "type": "string",
+      "title": "User token (enterprise JWT)",
+      "description": "Optional enterprise JWT for the Desktop user, so the audit row carries the validated user. Leave blank to use a service identity.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    },
+    "tenant_id": {
+      "type": "string",
+      "title": "Tenant ID",
+      "description": "AxonFlow tenant this Desktop fleet belongs to.",
+      "required": false,
+      "default": ""
+    },
+    "org_id": {
+      "type": "string",
+      "title": "Org ID",
+      "description": "AxonFlow org identifier (optional; the authenticated identity is authoritative).",
+      "required": false,
+      "default": ""
+    },
+    "fail_mode": {
+      "type": "string",
+      "title": "Fail mode",
+      "description": "What to do when the policy service is unreachable. 'closed' (recommended, default) blocks the tool call; 'open' forwards the call without policy enforcement (PII redaction is still applied as a safety net). Fintech deployments should keep this 'closed'.",
+      "required": false,
+      "default": "closed"
+    },
+    "leader_email": {
+      "type": "string",
+      "title": "Leader email",
+      "description": "The Desktop user's email, stamped on every audit row and forwarded to the policy service for SIEM correlation.",
+      "required": false,
+      "default": ""
+    },
+    "backends_file": {
+      "type": "file",
+      "title": "Backend MCP servers (config file)",
+      "description": "Path to a JSON file describing the backend MCP servers to front. See config.example.json. At least one backend is required.",
+      "required": true
+    },
+    "audit_log": {
+      "type": "string",
+      "title": "Audit log path",
+      "description": "Optional path to an append-only JSONL file for the Layer-1 audit trail. Leave blank to log to the extension's stderr only.",
+      "required": false,
+      "default": ""
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  }
+}

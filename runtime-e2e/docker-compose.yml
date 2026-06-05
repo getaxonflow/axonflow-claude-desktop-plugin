@@ -1,0 +1,49 @@
+# Runtime-e2e stack for the AxonFlow Claude Desktop governance proxy.
+#
+# Boots a LIVE AxonFlow agent (community edition) with its Decision API so the
+# proxy is exercised against a real PDP — no mocked verdicts (the whole point of
+# runtime-e2e). Policy posture is pinned deterministically:
+#   - SQLI_ACTION=block  → a SQL-injection tool arg yields verdict=deny
+#   - PII_ACTION=redact  → a critical-PII tool arg yields allow + redact_pii
+#
+# The proxy + stub backend run on the host (driven by run.sh over stdio); only
+# postgres + the agent run here.
+#
+# Usage:  docker compose up -d   →   ../run.sh   →   docker compose down -v
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: axonflow
+      POSTGRES_PASSWORD: localdev123
+      POSTGRES_DB: axonflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U axonflow"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  axonflow-agent:
+    # Prebuilt community agent image (Decision Mode + static policy engine).
+    # Override with AXONFLOW_AGENT_IMAGE to test against a freshly built tag.
+    image: ${AXONFLOW_AGENT_IMAGE:-686831565523.dkr.ecr.us-east-1.amazonaws.com/axonflow-agent:5747857}
+    environment:
+      DATABASE_URL: postgres://axonflow:localdev123@postgres:5432/axonflow?sslmode=disable
+      AXONFLOW_EDITION: community
+      DEPLOYMENT_MODE: community
+      AXONFLOW_DB_USE_APP_ROLE: "false"
+      AXONFLOW_PROFILE: strict
+      SQLI_ACTION: block
+      PII_ACTION: redact
+      PORT: "8080"
+      LOG_LEVEL: info
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
