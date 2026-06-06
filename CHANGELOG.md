@@ -6,6 +6,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-06
+
+First release. The AxonFlow MCP governance proxy as a one-click `.mcpb` Claude
+Desktop Extension.
+
 ### Fixed
 - **Enterprise PDP authentication.** The proxy now authenticates to
   `POST /api/v1/decide` with HTTP **Basic auth** (`base64(clientID:clientSecret)`),
@@ -55,4 +60,5 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 - Unit tests (≥80% coverage) for verdict mapping, aggregation/routing,
   fail-closed posture, PII redaction, audit schema, and both backend transports.
 
-[Unreleased]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin
+[Unreleased]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin/releases/tag/v0.1.0
