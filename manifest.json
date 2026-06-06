@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "axonflow-governance",
   "display_name": "AxonFlow Governance",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Governs Claude Desktop's MCP tool calls: enforces AxonFlow Decision Mode policy on every call, redacts PII from responses, and audits everything.",
   "long_description": "AxonFlow Governance is an MCP proxy for Claude Desktop. It fronts your internal MCP servers (CRM, BigQuery, back-office) and, on every `tools/call`, checks the call against AxonFlow Decision Mode (`POST /api/v1/decide`) before forwarding it. Policy-violating calls are blocked, PII is redacted from tool responses before it reaches the conversation, and every call is written to a Layer-1 audit trail with a `decision_id`/`trace_id` for SIEM correlation.\n\nClaude Desktop has no PreToolUse/PostToolUse hooks (those are Claude Code only) \u2014 the MCP layer is the only pre-execution interception point, so enforcement lives in this proxy. The proxy fails CLOSED by default: if the policy service is unreachable, tool calls are blocked.",
   "author": {

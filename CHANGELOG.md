@@ -6,6 +6,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-06
+
 ### Fixed
 - **Response PII redaction is now unconditional (the §4.3 control).** The proxy
   previously redacted a tool response **only** when the request tripped a
@@ -88,5 +90,6 @@ Desktop Extension.
 - Unit tests (≥80% coverage) for verdict mapping, aggregation/routing,
   fail-closed posture, PII redaction, audit schema, and both backend transports.
 
-[Unreleased]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin/releases/tag/v0.1.0
