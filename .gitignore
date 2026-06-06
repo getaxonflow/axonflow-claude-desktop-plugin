@@ -39,3 +39,7 @@ build/
 /axonflow-mcp-proxy
 /stub-mcp-server
 runtime-e2e/cli-harness/backend/backend
+
+# Python bytecode from local test runs
+__pycache__/
+*.pyc

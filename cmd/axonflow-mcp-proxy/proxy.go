@@ -330,12 +330,14 @@ func (p *Proxy) enforce(ctx context.Context, id json.RawMessage, params ToolCall
 	}
 }
 
-// forwardAndRedact forwards an allowed call to its backend and applies the
-// redact_pii obligation to the response before returning it to Claude.
-// forced=true means a fail-open / unknown-verdict path chose to forward without
-// an explicit allow verdict; on that path redaction runs unconditionally (a
-// defense-in-depth safety net) so a fail-open posture never leaks PII into the
-// context window even though the (absent) decision carries no obligation.
+// forwardAndRedact forwards an allowed call to its backend and scans the
+// response for PII before returning it to Claude. By default (RedactResponses
+// == "always") the scan is UNCONDITIONAL — the proxy is the only component that
+// ever sees a tool response, so stripping PII out of it can't be gated on a PDP
+// obligation the agent would have to have attached. forced=true marks a
+// fail-open / unknown-verdict forward (no explicit allow verdict); it still
+// triggers redaction even under the legacy "on-obligation" mode so a fail-open
+// posture never leaks PII into the context window.
 func (p *Proxy) forwardAndRedact(ctx context.Context, id json.RawMessage, r route, params ToolCallParams, decision DecideResponse, forced bool) callOutcome {
 	out := callOutcome{
 		verdict:           firstNonEmpty(decision.Verdict, verdictAllow),
@@ -371,11 +373,13 @@ func (p *Proxy) forwardAndRedact(ctx context.Context, id json.RawMessage, r rout
 		return out
 	}
 
-	// Redact when the PDP attached a redact_pii obligation — OR unconditionally
-	// on a forced (fail-open) forward, where there is no obligation to honour but
-	// we still must not leak PII into the context window. This is the §4.3
-	// control: strip PII before the response enters Claude's context window.
-	if forced || decision.hasObligation("redact_pii") {
+	// Scan the response for PII before it enters Claude's context window. This is
+	// the §4.3 control. Default-on: every response is scanned regardless of
+	// verdict/obligation, because the agent never sees the response — so the
+	// proxy can't outsource the decision to "did the PDP flag the request?".
+	// (A clean, allow-with-no-obligation request whose response still carries PII
+	// is exactly the case obligation-gating used to leak.)
+	if p.shouldRedact(decision, forced) {
 		redacted, summary := redactResult(result)
 		result = redacted
 		out.redactionCount = summary.Count
@@ -387,6 +391,27 @@ func (p *Proxy) forwardAndRedact(ctx context.Context, id json.RawMessage, r rout
 	out.recordCount = countRecords(result)
 	out.response = JSONRPCResponse{JSONRPC: "2.0", ID: id, Result: result}
 	return out
+}
+
+// shouldRedact decides whether the response redactor runs for this forward,
+// per the AXONFLOW_REDACT_RESPONSES mode:
+//   - "always"        (default) → always scan; the §4.3 baseline.
+//   - "on-obligation"           → scan only when the PDP attached a redact_pii
+//     obligation OR this is a forced (fail-open) forward with no obligation to
+//     honour but where leaking PII would still be unacceptable.
+//   - "off"                     → never scan (explicit opt-out footgun).
+//
+// An unset/unknown mode is treated as "always": loadConfig rejects unknown
+// values at boot, so a misconfigured proxy fails safe (scan) here, never open.
+func (p *Proxy) shouldRedact(decision DecideResponse, forced bool) bool {
+	switch p.cfg.RedactResponses {
+	case redactOff:
+		return false
+	case redactOnObligation:
+		return forced || decision.hasObligation("redact_pii")
+	default: // redactAlways and any unset/unexpected value → fail safe (scan)
+		return true
+	}
 }
 
 // errorResponse builds a JSON-RPC error response.

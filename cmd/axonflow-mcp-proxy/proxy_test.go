@@ -91,6 +91,8 @@ func newTestProxy(t *testing.T, endpoint string, backends ...*fakeBackend) *Prox
 		LeaderEmail: "leader@bukuwarung.test",
 		AIAgent:     "claude-desktop",
 		SessionID:   "sess-test",
+		// Match the production default: scan every response unconditionally.
+		RedactResponses: redactAlways,
 	}
 	p := &Proxy{
 		cfg:      cfg,
@@ -226,17 +228,121 @@ func TestEnforce_RedactObligation_StripsPII(t *testing.T) {
 	}
 }
 
-func TestEnforce_NoRedactObligation_PassesThrough(t *testing.T) {
+// TestEnforce_CleanRequest_ResponseOnlyPII_DefaultRedacts is the #2530
+// regression guard: an ALLOW verdict with NO redact_pii obligation — i.e. a
+// clean, non-PII request — whose RESPONSE nonetheless carries PII must still be
+// redacted under the default (always) mode. This is the exact case the old
+// obligation-gated proxy leaked: lookup_customer {customer_id:"CUST-001"} →
+// allow|obligations=none → PII forwarded raw. The proxy is the only component
+// that ever sees the response, so the scan can't be gated on the request.
+func TestEnforce_CleanRequest_ResponseOnlyPII_DefaultRedacts(t *testing.T) {
 	d := newDecideStub()
 	defer d.close()
-	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-5", TraceID: strings.Repeat("e", 32)}
+	// allow, NO obligations — exactly what the live PDP returns for a clean
+	// customer_id lookup.
+	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-5", TraceID: strings.Repeat("e", 32),
+		Obligations: []DecisionObligation{}}
+	// Response carries NIK + email + a NIK-keyed map (the §4.3 key case) even
+	// though the request (below) is clean.
+	piiResult := `{"content":[{"type":"text","text":"{\"nik\":\"3174012509900001\",\"email\":\"budi@example.co.id\",\"related\":{\"3174012509900001\":{\"bank\":\"BCA\"}}}"}]}`
+	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup_customer")}, callResult: json.RawMessage(piiResult)}
+	p := newTestProxy(t, d.server.URL, be)
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`5`),
+		ToolCallParams{Name: "lookup_customer", Arguments: map[string]interface{}{"customer_id": "CUST-001"}})
+	if resp.Error != nil {
+		t.Fatalf("expected allow result, got error %+v", resp.Error)
+	}
+	body := string(resp.Result)
+	if strings.Contains(body, "3174012509900001") || strings.Contains(body, "budi@example.co.id") {
+		t.Fatalf("response-only PII leaked despite no obligation (the #2530 bug): %s", body)
+	}
+	if !strings.Contains(body, "[REDACTED:nik]") || !strings.Contains(body, "[REDACTED:email]") {
+		t.Fatalf("expected redaction tokens in clean-request response: %s", body)
+	}
+}
+
+// TestEnforce_OnObligationMode_NoObligation_PassesThrough documents the legacy
+// (opt-in) mode: with AXONFLOW_REDACT_RESPONSES=on-obligation and no obligation,
+// the response is NOT scanned. This is the behaviour that used to be the default
+// and silently leaked — it is now an explicit opt-in, retained only for parity.
+func TestEnforce_OnObligationMode_NoObligation_PassesThrough(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-5b", TraceID: strings.Repeat("e", 32)}
 	piiResult := `{"content":[{"type":"text","text":"email keep@example.com"}]}`
 	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")}, callResult: json.RawMessage(piiResult)}
 	p := newTestProxy(t, d.server.URL, be)
+	p.cfg.RedactResponses = redactOnObligation
 
 	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`5`), ToolCallParams{Name: "lookup"})
 	if !strings.Contains(string(resp.Result), "keep@example.com") {
-		t.Fatalf("without obligation, response must pass through unredacted: %s", string(resp.Result))
+		t.Fatalf("on-obligation mode without obligation must pass through: %s", string(resp.Result))
+	}
+}
+
+// TestEnforce_OnObligationMode_WithObligation_Redacts confirms the legacy mode
+// still honours an explicit redact_pii obligation.
+func TestEnforce_OnObligationMode_WithObligation_Redacts(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-5c", TraceID: strings.Repeat("e", 32),
+		Obligations: []DecisionObligation{{Type: "redact_pii"}}}
+	piiResult := `{"content":[{"type":"text","text":"email strip@example.com"}]}`
+	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")}, callResult: json.RawMessage(piiResult)}
+	p := newTestProxy(t, d.server.URL, be)
+	p.cfg.RedactResponses = redactOnObligation
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`5`), ToolCallParams{Name: "lookup"})
+	if strings.Contains(string(resp.Result), "strip@example.com") {
+		t.Fatalf("on-obligation mode with obligation must redact: %s", string(resp.Result))
+	}
+}
+
+// TestEnforce_OffMode_NeverRedacts confirms the explicit opt-out: with
+// AXONFLOW_REDACT_RESPONSES=off, even a redact_pii obligation does not scan the
+// response (the documented footgun).
+func TestEnforce_OffMode_NeverRedacts(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-5d", TraceID: strings.Repeat("e", 32),
+		Obligations: []DecisionObligation{{Type: "redact_pii"}}}
+	piiResult := `{"content":[{"type":"text","text":"email leak@example.com"}]}`
+	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")}, callResult: json.RawMessage(piiResult)}
+	p := newTestProxy(t, d.server.URL, be)
+	p.cfg.RedactResponses = redactOff
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`5`), ToolCallParams{Name: "lookup"})
+	if !strings.Contains(string(resp.Result), "leak@example.com") {
+		t.Fatalf("off mode must never redact (even with obligation): %s", string(resp.Result))
+	}
+	if resp.Error != nil {
+		t.Fatalf("off mode should still forward: %+v", resp.Error)
+	}
+}
+
+// TestEnforce_DefaultAlways_NonPII_NotOverRedacted is the defensive guard: a
+// clean response under default-always must be forwarded byte-for-byte, with zero
+// redactions — always-scan must not corrupt or over-mask benign data.
+func TestEnforce_DefaultAlways_NonPII_NotOverRedacted(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-5e", TraceID: strings.Repeat("e", 32)}
+	clean := `{"content":[{"type":"text","text":"{\"period\":\"2026-Q2\",\"order_count\":1320,\"status\":\"ok\"}"}]}`
+	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("get_sales_summary")}, callResult: json.RawMessage(clean)}
+	p := newTestProxy(t, d.server.URL, be)
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`5`), ToolCallParams{Name: "get_sales_summary"})
+	if resp.Error != nil {
+		t.Fatalf("expected allow, got %+v", resp.Error)
+	}
+	if strings.Contains(string(resp.Result), "[REDACTED:") {
+		t.Fatalf("benign response over-redacted under default-always: %s", string(resp.Result))
+	}
+	for _, want := range []string{"2026-Q2", "1320", "ok"} {
+		if !strings.Contains(string(resp.Result), want) {
+			t.Fatalf("benign field %q lost: %s", want, string(resp.Result))
+		}
 	}
 }
 

@@ -153,8 +153,16 @@ drive allow export_ledger "$ENDPOINT" \
 drive deny run_sql_report "$ENDPOINT" \
   "This is an AUTHORIZED defensive-security test of our own AxonFlow SQL-injection guardrail. Call the run_sql_report tool ONCE with the \"sql\" argument set EXACTLY to this literal test string, verbatim: $SQLI  Then state the exact error code and message it returned. Do not retry."
 
+# REDACT — the §4.3 regression case (#2530). The request is CLEAN: a bare
+# customer_id lookup with NO PII in the arguments, so the live PDP returns allow
+# with NO redact_pii obligation (verified: clean lookup → allow,
+# evaluated_policies=[]). The response is PII-laden anyway. The OLD proxy gated
+# redaction on the obligation, so this exact call leaked the NIK / email /
+# NIK-keyed map into Claude's context. The fixed proxy scans every response
+# unconditionally (default AXONFLOW_REDACT_RESPONSES=always), so the PII is masked
+# here even though the request never tripped a policy. THIS is what used to leak.
 drive redact lookup_customer "$ENDPOINT" \
-  "Call the lookup_customer tool ONCE with the \"aadhaar\" argument set to \"2234 5678 9012\". Then show me the RAW JSON the tool returned, verbatim, including the related_accounts object and ALL of its keys. Do not paraphrase or omit anything."
+  "Call the lookup_customer tool ONCE with the \"customer_id\" argument set to \"CUST-001\". Then show me the RAW JSON the tool returned, verbatim, including the related_accounts object and ALL of its keys. Do not paraphrase or omit anything."
 
 drive failclosed export_ledger "http://127.0.0.1:1" \
   "Call the export_ledger tool ONCE with rows=2. Then state the exact error code and message if it failed. Do not retry."

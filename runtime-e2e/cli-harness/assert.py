@@ -80,11 +80,34 @@ def db_row(decision_id):
     return {"verdict": verdict, "gateway_id": gw, "leader": leader, "policies": pols}
 
 
+# --- universal PII-leak detector (runs on EVERY case's response-to-Claude) --
+# A single check applied to all four cases, not just the redact one. A leak in a
+# case that wasn't looking (a deny that secretly forwarded, an allow whose
+# response carried PII) is exactly how the §4.3 hole hid; this catches it. Tuned
+# to not match the backend's benign numerics (ledger amounts < 13 digits, no
+# '@'/'+62'), so a hit is a real leak.
+import re as _re
+_LEAK_PATTERNS = [
+    ("nik_or_long_id", _re.compile(r"\b\d{16}\b")),
+    ("email", _re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")),
+    ("phone_id", _re.compile(r"\b(?:\+?62|0)8[1-9]\d{6,10}\b")),
+]
+_KNOWN_PII = ["3174012509900001", "budi.santoso@example.co.id", "+6281234567890"]
+
+
+def assert_no_leak(label, text):
+    hits = [k for k, rx in _LEAK_PATTERNS if rx.search(text)]
+    hits += [f"lit:{l}" for l in _KNOWN_PII if l in text]
+    check(not hits, f"[{label}] universal leak detector: NO raw PII in Claude's context"
+          + ("" if not hits else f" — LEAKED {hits}"))
+
+
 print("================ CLI-harness assertions ================")
 
 # ---- ALLOW ----------------------------------------------------------------
 print("\n[ALLOW] benign export_ledger call is forwarded")
 a = read_audit("allow.audit.jsonl")
+assert_no_leak("allow", read_text("allow.out"))
 arow = next((r for r in a if r["tool_name"] == "export_ledger"), None)
 check(arow is not None, "proxy Layer-1 row written for export_ledger")
 if arow:
@@ -104,10 +127,15 @@ print("\n[DENY] SQL-injection call is blocked, backend never reached")
 d = read_audit("deny.audit.jsonl")
 drow = next((r for r in d if r["tool_name"] == "run_sql_report"), None)
 dout = read_text("deny.out")
+assert_no_leak("deny", dout)
 check(drow is not None, "proxy Layer-1 row written for run_sql_report")
 if drow:
     check(drow["verdict"] == "deny", f"verdict=deny (got {drow['verdict']})")
-    check("sys_sqli_drop_table" in drow["evaluated_policies"], f"policy sys_sqli_drop_table (got {drow['evaluated_policies']})")
+    # The SQLi string is a STACKED drop (";" + DROP TABLE), so the live PDP
+    # matches sys_sqli_stacked_drop. Accept either the stacked or the bare
+    # drop-table policy so the assertion tracks the real verdict, not a stale id.
+    check(any(p in drow["evaluated_policies"] for p in ("sys_sqli_stacked_drop", "sys_sqli_drop_table")),
+          f"SQLi drop policy fired (got {drow['evaluated_policies']})")
     check(drow["response_record_count"] == 0, "no records forwarded on deny (response_record_count=0)")
 check("-32001" in dout, "Claude received JSON-RPC -32001 (deny) for the call")
 # Real proof the backend was NOT reached: run_sql_report echoes "would_run" +
@@ -119,21 +147,29 @@ if drow:
     db = db_row(drow["decision_id"])
     check(db is not None and db["verdict"] == "deny", "platform audit_logs records verdict=deny")
     if db:
-        check("sys_sqli_drop_table" in db["policies"], f"DB policy_ids include sys_sqli_drop_table ({db['policies']})")
+        check(any(p in db["policies"] for p in ("sys_sqli_stacked_drop", "sys_sqli_drop_table")),
+              f"DB policy_ids include the SQLi drop policy ({db['policies']})")
 
-# ---- REDACT (incl NIK-keyed map, §4.3) ------------------------------------
-print("\n[REDACT] PII stripped from the response incl. a NIK-keyed map")
+# ---- REDACT — the §4.3 CLEAN-REQUEST regression (#2530) --------------------
+# The request is a bare customer_id lookup with NO PII, so the PDP returns allow
+# with NO redact_pii obligation (evaluated_policies empty). The old proxy gated
+# redaction on that obligation and therefore LEAKED this response. The fixed
+# proxy redacts unconditionally, so the NIK / email / NIK-keyed map are masked
+# even though no policy fired on the request.
+print("\n[REDACT] clean-request response PII stripped incl. a NIK-keyed map (the #2530 fix)")
 r = read_audit("redact.audit.jsonl")
 rrow = next((r_ for r_ in r if r_["tool_name"] == "lookup_customer"), None)
 rout = read_text("redact.out")
 check(rrow is not None, "proxy Layer-1 row written for lookup_customer")
 if rrow:
     check(rrow["verdict"] == "allow", f"verdict=allow (got {rrow['verdict']})")
-    check("sys_pii_aadhaar" in rrow["evaluated_policies"], f"redact obligation from sys_pii_aadhaar (got {rrow['evaluated_policies']})")
-    check(rrow["redaction_count"] > 0, f"redaction_count>0 (got {rrow['redaction_count']})")
-# What the CLIENT (Claude) actually received:
-check("3174012509900001" not in rout, "real NIK absent from Claude's context window")
-check("budi.santoso@example.co.id" not in rout, "real email absent from Claude's context window")
+    # The clean request fires NO redact_pii obligation — that is the whole point.
+    check("sys_pii_aadhaar" not in rrow["evaluated_policies"],
+          f"clean request fires NO obligation (evaluated_policies={rrow['evaluated_policies']})")
+    check(rrow["redaction_count"] > 0,
+          f"response redacted anyway — unconditionally (redaction_count={rrow['redaction_count']})")
+# What the CLIENT (Claude) actually received — the universal detector + specifics:
+assert_no_leak("redact", rout)
 check("[REDACTED:nik]" in rout, "NIK redaction token present in what Claude received")
 # §4.3: the NIK-keyed object KEY must be masked, not just the value. The backend
 # returns related_accounts keyed by the NIK; a value-only redactor would leak it.
@@ -141,13 +177,15 @@ check('"[REDACTED:nik]":' in rout or "'[REDACTED:nik]':" in rout,
       "NIK-keyed map KEY is redacted (§4.3 key redaction), not just values")
 if rrow:
     db = db_row(rrow["decision_id"])
-    check(db is not None and db["verdict"] == "allow", "platform audit_logs records the allow+obligation decision")
+    check(db is not None and db["verdict"] == "allow",
+          "platform audit_logs records the allow (no-obligation) decision")
 
 # ---- FAIL-CLOSED ----------------------------------------------------------
 print("\n[FAIL-CLOSED] PDP unreachable → call blocked")
 f = read_audit("failclosed.audit.jsonl")
 frow = next((r_ for r_ in f if r_["tool_name"] == "export_ledger"), None)
 fout = read_text("failclosed.out")
+assert_no_leak("fail-closed", fout)
 check(frow is not None, "proxy Layer-1 row written for the fail-closed call")
 if frow:
     check(frow["verdict"] == "deny", f"verdict=deny on PDP-unreachable (got {frow['verdict']})")
