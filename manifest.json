@@ -103,7 +103,7 @@
     "fail_mode": {
       "type": "string",
       "title": "Fail mode",
-      "description": "What to do when the policy service is unreachable. 'closed' (recommended, default) blocks the tool call; 'open' forwards the call without policy enforcement (PII redaction is still applied as a safety net). Fintech deployments should keep this 'closed'.",
+      "description": "What to do when the policy service is unreachable. 'closed' (recommended, default) blocks the tool call; 'open' forwards the call without policy enforcement (response PII redaction is still applied as a safety net, unless AXONFLOW_REDACT_RESPONSES=off). Fintech deployments should keep this 'closed'.",
       "required": false,
       "default": "closed"
     },

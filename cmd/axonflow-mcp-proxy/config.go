@@ -33,6 +33,17 @@ type Config struct {
 	// fintech's tool surface (BukuWarung). Opt in only with eyes open.
 	FailOpen bool // AXONFLOW_FAIL_MODE=open
 
+	// RedactResponses controls when the local response redactor runs over a
+	// forwarded tool response. The DEFAULT is "always" (default-on): every tool
+	// response is scanned before it reaches Claude's context, regardless of
+	// whether the PDP attached a redact_pii obligation — because the agent never
+	// sees the response, so stripping PII out of it is unconditionally the
+	// proxy's job (the §4.3 control). "on-obligation" restores the legacy
+	// obligation-gated behaviour (scan only on a redact_pii obligation or a
+	// fail-open forward); "off" disables response redaction entirely (an explicit
+	// opt-out footgun — PII in responses then flows to the context window).
+	RedactResponses string // AXONFLOW_REDACT_RESPONSES=always|on-obligation|off (default always)
+
 	// Identity stamped onto every Layer-1 audit row + forwarded to the PDP in
 	// the decision context map (BukuWarung Layer-2 headers).
 	LeaderEmail string // AXONFLOW_LEADER_EMAIL — the Desktop user
@@ -69,6 +80,15 @@ type BackendConfig struct {
 // defaultBackendTimeout bounds a single backend tools/call forward when
 // AXONFLOW_BACKEND_TIMEOUT is unset, so a hung backend can't wedge a tool call.
 const defaultBackendTimeout = 30 * time.Second
+
+// Response-redaction modes (AXONFLOW_REDACT_RESPONSES). The default is
+// redactAlways: the proxy is the only thing that ever sees a tool response, so
+// it scans every one for PII by default rather than trusting the PDP to flag it.
+const (
+	redactAlways       = "always"        // default: scan every response
+	redactOnObligation = "on-obligation" // legacy: scan only on obligation / fail-open
+	redactOff          = "off"           // explicit opt-out (footgun)
+)
 
 // slugRE bounds backend IDs to MCP-tool-name-safe characters so the namespaced
 // "<id>__<tool>" form is itself a valid tool name (clients constrain tool
@@ -132,6 +152,19 @@ func LoadConfig() (Config, error) {
 		LeaderEmail:  envOr("AXONFLOW_LEADER_EMAIL", "unknown@bukuwarung.local"),
 		AIAgent:      envOr("AXONFLOW_AI_AGENT", "claude-desktop"),
 		AuditLogPath: os.Getenv("AXONFLOW_AUDIT_LOG"),
+	}
+
+	// Response redaction mode. Default-on ("always"): the proxy scans every tool
+	// response for PII before it reaches Claude's context, because no other
+	// component sees the response. An unknown value is rejected at boot rather
+	// than silently defaulting (a typo'd "alway" must not quietly disable a
+	// compliance control).
+	cfg.RedactResponses = strings.ToLower(envOr("AXONFLOW_REDACT_RESPONSES", redactAlways))
+	switch cfg.RedactResponses {
+	case redactAlways, redactOnObligation, redactOff:
+	default:
+		return Config{}, fmt.Errorf("invalid AXONFLOW_REDACT_RESPONSES %q: want %q, %q, or %q",
+			cfg.RedactResponses, redactAlways, redactOnObligation, redactOff)
 	}
 
 	timeout, err := time.ParseDuration(envOr("AXONFLOW_DECIDE_TIMEOUT", "10s"))

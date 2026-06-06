@@ -100,6 +100,69 @@ func TestLoadConfig_BadTimeout_Errors(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_RedactResponses_DefaultAndParsing(t *testing.T) {
+	base := map[string]string{"AXONFLOW_BACKENDS": `[{"id":"x","url":"http://a"}]`, "AXONFLOW_BACKENDS_FILE": ""}
+
+	// Default (unset) → always.
+	withEnv(t, base)
+	t.Setenv("AXONFLOW_REDACT_RESPONSES", "")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.RedactResponses != redactAlways {
+		t.Fatalf("default RedactResponses = %q, want %q", cfg.RedactResponses, redactAlways)
+	}
+
+	// Each valid mode parses (case-insensitively).
+	for in, want := range map[string]string{"always": redactAlways, "on-obligation": redactOnObligation, "off": redactOff, "OFF": redactOff} {
+		t.Setenv("AXONFLOW_REDACT_RESPONSES", in)
+		cfg, err := LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig(%q): %v", in, err)
+		}
+		if cfg.RedactResponses != want {
+			t.Fatalf("RedactResponses(%q) = %q, want %q", in, cfg.RedactResponses, want)
+		}
+	}
+
+	// An unknown value is rejected at boot, never silently ignored.
+	t.Setenv("AXONFLOW_REDACT_RESPONSES", "alway")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatalf("expected error on invalid AXONFLOW_REDACT_RESPONSES")
+	}
+}
+
+// TestShouldRedact_Modes covers the decision matrix directly (every mode ×
+// obligation present/absent × forced/not), independent of the HTTP path.
+func TestShouldRedact_Modes(t *testing.T) {
+	withObl := DecideResponse{Obligations: []DecisionObligation{{Type: "redact_pii"}}}
+	noObl := DecideResponse{Obligations: []DecisionObligation{}}
+	cases := []struct {
+		mode   string
+		dec    DecideResponse
+		forced bool
+		want   bool
+	}{
+		{redactAlways, noObl, false, true},         // clean request → still scan (the fix)
+		{redactAlways, withObl, false, true},       // obligation → scan
+		{redactAlways, noObl, true, true},          // forced → scan
+		{redactOnObligation, noObl, false, false},  // legacy: no obligation → skip
+		{redactOnObligation, withObl, false, true}, // legacy: obligation → scan
+		{redactOnObligation, noObl, true, true},    // legacy: forced fail-open → scan
+		{redactOff, withObl, false, false},         // off: never
+		{redactOff, noObl, true, false},            // off: never, even forced
+		{"", noObl, false, true},                   // unset/unexpected → fail safe (scan)
+	}
+	for _, c := range cases {
+		p := &Proxy{cfg: Config{RedactResponses: c.mode}}
+		if got := p.shouldRedact(c.dec, c.forced); got != c.want {
+			t.Fatalf("shouldRedact(mode=%q, obl=%v, forced=%v) = %v, want %v",
+				c.mode, c.dec.hasObligation("redact_pii"), c.forced, got, c.want)
+		}
+	}
+}
+
 func TestBackendConfig_Validate(t *testing.T) {
 	cases := []struct {
 		name    string
