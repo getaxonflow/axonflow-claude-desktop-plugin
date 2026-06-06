@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,8 +20,15 @@ func testDecideClient(endpoint string) *DecideClient {
 
 func TestDecide_AllowParsesResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Client-Id") != "t" || r.Header.Get("X-Client-Secret") != "s" {
-			t.Errorf("auth headers missing: %v", r.Header)
+		// The PDP authenticates from the Authorization: Basic header only — the
+		// agent ignores any custom X-Client-* headers (see decide.go). Assert the
+		// canonical Basic credential reaches the server and that the legacy
+		// X-Client-Secret header is NOT used to carry the secret.
+		if got, want := r.Header.Get("Authorization"), "Basic "+basicAuth("t", "s"); got != want {
+			t.Errorf("Authorization header = %q, want %q", got, want)
+		}
+		if r.Header.Get("X-Client-Secret") != "" {
+			t.Errorf("secret leaked via X-Client-Secret header: %q", r.Header.Get("X-Client-Secret"))
 		}
 		_ = json.NewEncoder(w).Encode(DecideResponse{Verdict: "allow", DecisionID: "d1", TraceID: strings.Repeat("a", 32),
 			Obligations: []DecisionObligation{{Type: "redact_pii"}}})
@@ -36,6 +44,37 @@ func TestDecide_AllowParsesResponse(t *testing.T) {
 	}
 	if resp.hasObligation("nope") {
 		t.Fatalf("false obligation match")
+	}
+}
+
+// TestDecide_CommunityNoSecretNoAuthHeader asserts that with no client secret
+// (community mode) the proxy sends NO Authorization header — community PDPs
+// require no auth, and an empty-secret Basic header would be malformed.
+func TestDecide_CommunityNoSecretNoAuthHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h := r.Header.Get("Authorization"); h != "" {
+			t.Errorf("community mode must not send Authorization, got %q", h)
+		}
+		_ = json.NewEncoder(w).Encode(DecideResponse{Verdict: "allow", DecisionID: "d1"})
+	}))
+	defer srv.Close()
+	c := NewDecideClient(Config{Endpoint: srv.URL, ClientID: "claude-desktop-proxy", Timeout: time.Second})
+	_, status, err := c.Decide(context.Background(), DecideRequest{Stage: "tool", Query: "q"}, "")
+	if err != nil || status != 200 {
+		t.Fatalf("decide err=%v status=%d", err, status)
+	}
+}
+
+// TestBasicAuth pins the exact base64(clientID:clientSecret) encoding the agent
+// splits on the first ":" — a secret that itself contains ":" must round-trip.
+func TestBasicAuth(t *testing.T) {
+	if got, want := basicAuth("org", "AXON-abc.def"), "b3JnOkFYT04tYWJjLmRlZg=="; got != want {
+		t.Fatalf("basicAuth = %q, want %q", got, want)
+	}
+	// A license key with a ':' must remain intact (agent uses SplitN(...,2)).
+	raw, _ := base64.StdEncoding.DecodeString(basicAuth("org", "a:b:c"))
+	if string(raw) != "org:a:b:c" {
+		t.Fatalf("basicAuth lost data: %q", raw)
 	}
 }
 

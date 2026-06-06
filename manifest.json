@@ -66,14 +66,14 @@
     "client_id": {
       "type": "string",
       "title": "Client ID",
-      "description": "AxonFlow client identifier (sent as X-Client-Id).",
+      "description": "AxonFlow client identifier — sent as the HTTP Basic auth username. In enterprise / in-vpc-enterprise mode this MUST be your AxonFlow org id (the org the license was issued to).",
       "required": true,
       "default": "claude-desktop-proxy"
     },
     "client_secret": {
       "type": "string",
       "title": "Client secret",
-      "description": "AxonFlow client secret (sent as X-Client-Secret). Leave blank in community mode.",
+      "description": "AxonFlow client secret — sent as the HTTP Basic auth password. In enterprise / in-vpc-enterprise mode this is your Enterprise license key. Leave blank in community mode (no auth).",
       "sensitive": true,
       "required": false,
       "default": ""
