@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -144,9 +145,18 @@ func (d *DecideClient) Decide(ctx context.Context, req DecideRequest, traceparen
 		return nil, 0, fmt.Errorf("create decide request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Client-Id", d.cfg.ClientID)
+	// Authenticate exactly as the canonical Decision Mode client does
+	// (examples/mcp-decision-mode/decide_client.py — "the same way the SDK
+	// does"): HTTP Basic auth, base64(clientID:clientSecret). The agent's
+	// enterprise / in-vpc-enterprise auth path (platform/agent/auth.go
+	// extractClientID + extractClientSecret) reads credentials ONLY from the
+	// Authorization: Basic header — custom X-Client-* headers are IGNORED, so an
+	// enterprise PDP 401s every decide call without this. ClientSecret is the
+	// Enterprise license key and ClientID MUST be the license's org id.
+	// Community-mode PDPs require no auth: an empty secret sends no header, which
+	// they accept (the request is attributed to the default "community" client).
 	if d.cfg.ClientSecret != "" {
-		httpReq.Header.Set("X-Client-Secret", d.cfg.ClientSecret)
+		httpReq.Header.Set("Authorization", "Basic "+basicAuth(d.cfg.ClientID, d.cfg.ClientSecret))
 	}
 	if traceparent != "" {
 		httpReq.Header.Set("Traceparent", traceparent)
@@ -175,6 +185,13 @@ func (d *DecideClient) Decide(ctx context.Context, req DecideRequest, traceparen
 		return nil, resp.StatusCode, fmt.Errorf("decode decide response: %w", err)
 	}
 	return &decideResp, resp.StatusCode, nil
+}
+
+// basicAuth renders the HTTP Basic credential value base64(clientID:clientSecret),
+// matching the canonical decide client (decide_client.py:_basic_auth_header) and
+// the agent's extractClientID/extractClientSecret, which split on the first ":".
+func basicAuth(clientID, clientSecret string) string {
+	return base64.StdEncoding.EncodeToString([]byte(clientID + ":" + clientSecret))
 }
 
 // isClientError reports whether err is a non-retryable 4xx from the PDP.
