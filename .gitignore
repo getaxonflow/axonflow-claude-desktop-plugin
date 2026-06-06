@@ -38,3 +38,4 @@ build/
 # Stray local build binaries
 /axonflow-mcp-proxy
 /stub-mcp-server
+runtime-e2e/cli-harness/backend/backend

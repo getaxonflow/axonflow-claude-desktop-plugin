@@ -19,8 +19,8 @@ import (
 type Config struct {
 	// AxonFlow Decision Mode (PDP) connection.
 	Endpoint       string        // AXONFLOW_ENDPOINT, e.g. https://app.getaxonflow.com:8090
-	ClientID       string        // AXONFLOW_CLIENT_ID (X-Client-Id)
-	ClientSecret   string        // AXONFLOW_CLIENT_SECRET (X-Client-Secret)
+	ClientID       string        // AXONFLOW_CLIENT_ID (HTTP Basic username; enterprise = license org id)
+	ClientSecret   string        // AXONFLOW_CLIENT_SECRET (HTTP Basic password; enterprise = license key)
 	UserToken      string        // AXONFLOW_USER_TOKEN (enterprise JWT, optional)
 	TenantID       string        // AXONFLOW_TENANT_ID
 	OrgID          string        // AXONFLOW_ORG_ID
