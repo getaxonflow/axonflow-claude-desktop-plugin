@@ -1,0 +1,70 @@
+# CLI-harness stack — a LIVE in-vpc-enterprise AxonFlow agent (Decision Mode).
+#
+# This is the deployment mode BukuWarung actually runs (in-vpc-enterprise), so the
+# proxy is exercised exactly as a real customer would: the PDP requires a valid
+# Enterprise license AND HTTP Basic auth on every /api/v1/decide call (unlike the
+# community agent in ../docker-compose.yml, which needs no auth).
+#
+# Policy posture is pinned deterministically so verdicts are reproducible:
+#   - SQLI_ACTION=block  → a SQL-injection tool arg yields verdict=deny
+#   - PII_ACTION=redact  → an RBI-India-PII (Aadhaar) tool arg yields allow + redact_pii
+#
+# The agent image MUST be an EDITION=enterprise build at or past the #2526 merge
+# (records caller_identity.gateway_id at policy_details->>'gateway_id'). Build it
+# from the axonflow-enterprise repo and pass its tag via AXONFLOW_AGENT_IMAGE:
+#
+#   cd axonflow-enterprise && \
+#   docker build -f platform/agent/Dockerfile --build-arg EDITION=enterprise \
+#     -t axonflow-agent:sh-e2e .
+#
+#   AXONFLOW_AGENT_IMAGE=axonflow-agent:sh-e2e \
+#   AXONFLOW_LICENSE_KEY="$(cat bukuwarung.license)" \
+#   docker compose -f runtime-e2e/cli-harness/docker-compose.yml up -d
+#
+# Usage:  docker compose up -d  →  ../run.sh (or ./run.sh)  →  docker compose down -v
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: axonflow
+      POSTGRES_PASSWORD: localdev123
+      POSTGRES_DB: axonflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U axonflow"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  axonflow-agent:
+    # Enterprise build (>= #2526). Override with AXONFLOW_AGENT_IMAGE; the default
+    # is the locally-built tag the README documents.
+    image: ${AXONFLOW_AGENT_IMAGE:-axonflow-agent:sh-e2e}
+    environment:
+      DATABASE_URL: postgres://axonflow:localdev123@postgres:5432/axonflow?sslmode=disable
+      AXONFLOW_EDITION: enterprise
+      # BukuWarung's actual deployment mode (NOT "enterprise" — that defaults to
+      # saas + loads every industry migration; in-vpc-enterprise loads the
+      # Indonesia OJK/UU-PDP/BI migrations relocated to enterprise/ in v8.5.0).
+      DEPLOYMENT_MODE: in-vpc-enterprise
+      # The agent reads the license directly to detect tier (Enterprise) — it is
+      # NOT inferred from the Basic-auth secret. Both must carry the same key.
+      # run.sh enforces that this is set (and that /health reports Enterprise);
+      # the default is empty so `docker compose down` works without the env.
+      AXONFLOW_LICENSE_KEY: ${AXONFLOW_LICENSE_KEY:-}
+      ORG_ID: bukuwarung
+      AXONFLOW_DB_USE_APP_ROLE: "false"
+      AXONFLOW_PROFILE: strict
+      SQLI_ACTION: block
+      PII_ACTION: redact
+      PORT: "8080"
+      LOG_LEVEL: info
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
