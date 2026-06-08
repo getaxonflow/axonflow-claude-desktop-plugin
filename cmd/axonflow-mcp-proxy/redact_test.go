@@ -23,6 +23,8 @@ func TestRedactText_Patterns(t *testing.T) {
 		{"phone_0", "call 081234567890 now", "[REDACTED:phone_id]", "081234567890"},
 		{"email", "mail a.b+c@example.co.id done", "[REDACTED:email]", "a.b+c@example.co.id"},
 		{"bank_bca", "BCA: 1234567890 transfer", "[REDACTED:bank_account]", "1234567890"},
+		{"ssn_dash", "SSN: 529-21-1234 on file", "[REDACTED:ssn]", "529-21-1234"},
+		{"ssn_space", "ssn 078 05 1120 here", "[REDACTED:ssn]", "078 05 1120"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

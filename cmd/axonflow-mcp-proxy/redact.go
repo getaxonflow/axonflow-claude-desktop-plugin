@@ -33,8 +33,8 @@ import (
 //     is scanned independently and no element matches on its own.
 //   - Does NOT decode transformed PII: base64 / hex / URL-encoded values pass
 //     through unmatched.
-//   - Patterns are tuned for Indonesian + generic identifiers; other-locale PII
-//     (e.g. US SSN) is not covered here — add patterns as needed.
+//   - Patterns are tuned for Indonesian + generic identifiers plus US SSN;
+//     other-locale PII not listed below is not covered — add patterns as needed.
 // The fix for the gaps above is policy at the gate (block the call) or a
 // purpose-built backend that never emits the data — not this last-line filter.
 
@@ -71,6 +71,15 @@ var piiPatterns = []piiPattern{
 	{name: "nik", re: regexp.MustCompile(`\b\d{16}\b`), group: 0},
 	// Indonesian mobile — +62 / 62 / 0 followed by 8X and 6–10 more digits.
 	{name: "phone_id", re: regexp.MustCompile(`\b(?:\+?62|0)8[1-9]\d{6,10}\b`), group: 0},
+	// US SSN — NNN-NN-NNNN (separator required, dash or space). Loose by
+	// design: this last-line response filter masks anything SSN-shaped without
+	// the area-number validation the gate policy applies, because over-
+	// redaction is the safe failure mode here. NOTE: stop-gap — the platform
+	// PII engine (orchestrator response_processor) is the authoritative SSN
+	// detector; this exists only because the Decision-Mode path the proxy uses
+	// doesn't run the backend RESPONSE through that engine. See the response-
+	// redaction follow-up to converge on the platform engine.
+	{name: "ssn", re: regexp.MustCompile(`\b\d{3}[- ]\d{2}[- ]\d{4}\b`), group: 0},
 	// Email — generic, universally sensitive.
 	{name: "email", re: regexp.MustCompile(`\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`), group: 0},
 	// Payment card — 13–19 digit PAN, optionally space/dash grouped. Loose by

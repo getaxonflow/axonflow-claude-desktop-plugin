@@ -6,6 +6,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-09
+
+### Fixed
+- **US SSN is now redacted from tool responses.** The proxy's last-line
+  response redactor covered Indonesian + generic identifiers (NIK, NPWP, +62
+  phone, bank account, email, payment card) but had no US SSN pattern, so an
+  `NNN-NN-NNNN` value in a backend tool response reached the conversation
+  unredacted. Added an `ssn` pattern (separator-required; loose by design, as
+  over-redaction is the safe failure mode for this filter). NOTE: this local
+  redactor is a stop-gap for the Decision-Mode path, which does not run the
+  backend RESPONSE through the platform PII engine; converging response
+  redaction on the platform engine is tracked as a follow-up.
+
 ## [0.1.3] - 2026-06-09
 
 ### Fixed
