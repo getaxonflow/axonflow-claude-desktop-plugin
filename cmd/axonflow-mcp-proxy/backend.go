@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -321,9 +322,11 @@ func forwardStderr(id string, r io.Reader) {
 // http backend
 // ---------------------------------------------------------------------------
 
-// httpBackend POSTs JSON-RPC to a backend MCP server's URL (single JSON
-// request → single JSON response, the simplest MCP HTTP shape). SSE/streamable
-// HTTP is out of scope for this PoC and documented as such in the README.
+// httpBackend POSTs JSON-RPC to a backend MCP server's URL (MCP Streamable
+// HTTP). It accepts both response shapes the spec allows — a single JSON
+// object (application/json) and an SSE stream (text/event-stream) — and sends
+// an Accept header covering both, so spec-compliant servers (the official MCP
+// SDK transport) don't reject the request with 406 Not Acceptable.
 type httpBackend struct {
 	cfg    BackendConfig
 	client *http.Client
@@ -402,7 +405,12 @@ func (b *httpBackend) post(ctx context.Context, method string, params interface{
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json")
+	// MCP Streamable HTTP requires the client to accept BOTH a single JSON
+	// response and an SSE stream. Spec-compliant servers (the official MCP
+	// SDK transport) return 406 Not Acceptable if "text/event-stream" is
+	// absent, so accepting only application/json silently breaks every real
+	// backend — the symptom is a backend that never lists any tools.
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	if traceparent != "" {
 		httpReq.Header.Set("Traceparent", traceparent)
 	}
@@ -412,18 +420,83 @@ func (b *httpBackend) post(ctx context.Context, method string, params interface{
 		return nil, fmt.Errorf("backend %q post: %w", b.cfg.ID, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDecideResponseBytes))
-	if err != nil {
-		return nil, fmt.Errorf("backend %q read: %w", b.cfg.ID, err)
-	}
+
+	// Bound total bytes read regardless of response shape.
+	limited := io.LimitReader(resp.Body, maxDecideResponseBytes)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("backend %q returned HTTP %d: %s", b.cfg.ID, resp.StatusCode, string(body))
+		errBody, _ := io.ReadAll(limited)
+		return nil, fmt.Errorf("backend %q returned HTTP %d: %s", b.cfg.ID, resp.StatusCode, string(errBody))
 	}
-	var rpcResp JSONRPCResponse
-	if err := json.Unmarshal(body, &rpcResp); err != nil {
+	// The server picks the response shape: a single JSON object
+	// (application/json) or an SSE stream (text/event-stream) carrying the
+	// JSON-RPC message in a `data:` field. For SSE we stream and return on the
+	// FIRST matching response event rather than reading to stream close — so a
+	// backend that holds the POST-response stream open (idle keep-alive) can't
+	// wedge the proxy (the deferred Body.Close aborts the remainder).
+	rpcResp, err := decodeBackendResponse(resp.Header.Get("Content-Type"), limited, strconv.Itoa(id))
+	if err != nil {
 		return nil, fmt.Errorf("backend %q decode: %w", b.cfg.ID, err)
 	}
-	return &rpcResp, nil
+	return rpcResp, nil
+}
+
+// decodeBackendResponse parses a backend's JSON-RPC reply from either a single
+// JSON body (application/json) or an SSE stream (text/event-stream). For SSE it
+// reads the stream incrementally — joining a multi-line event's `data:` fields
+// with "\n" per the SSE spec — and returns the FIRST event that parses as the
+// JSON-RPC response for this request (matching id, or carrying a result/error),
+// so the caller can stop reading (and close) without waiting for stream close.
+func decodeBackendResponse(contentType string, r io.Reader, wantID string) (*JSONRPCResponse, error) {
+	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		body, err := io.ReadAll(r)
+		if err != nil {
+			return nil, err
+		}
+		var rpcResp JSONRPCResponse
+		if err := json.Unmarshal(body, &rpcResp); err != nil {
+			return nil, err
+		}
+		return &rpcResp, nil
+	}
+
+	var dataLines []string
+	flush := func() *JSONRPCResponse {
+		if len(dataLines) == 0 {
+			return nil
+		}
+		payload := strings.Join(dataLines, "\n")
+		dataLines = nil
+		var rpcResp JSONRPCResponse
+		if json.Unmarshal([]byte(payload), &rpcResp) != nil {
+			return nil
+		}
+		if string(rpcResp.ID) == wantID || rpcResp.Result != nil || rpcResp.Error != nil {
+			return &rpcResp
+		}
+		return nil
+	}
+
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), int(maxDecideResponseBytes))
+	for sc.Scan() {
+		line := sc.Text()
+		switch {
+		case line == "": // event boundary — dispatch
+			if rr := flush(); rr != nil {
+				return rr, nil // first matching event; caller closes the body
+			}
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		}
+		// other SSE fields (event:, id:, retry:, comments) are ignored
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("read SSE stream: %w", err)
+	}
+	if rr := flush(); rr != nil { // final event with no trailing blank line
+		return rr, nil
+	}
+	return nil, fmt.Errorf("no JSON-RPC response found in SSE stream")
 }
 
 func (b *httpBackend) Close() error { return nil }

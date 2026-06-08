@@ -102,8 +102,9 @@ rebuild.
   (`["3174","0125",…]`), nor base64/hex-encoded PII. The platform (PDP) at the
   gate remains the authoritative detector; block-at-the-gate (or a backend that
   never emits the data) is the fix for those gaps, not this last-line filter.
-- HTTP backends use the simple single-request/response MCP shape; SSE /
-  streamable-HTTP backends are not yet supported.
+- HTTP backends speak MCP Streamable HTTP: the proxy accepts both
+  `application/json` and `text/event-stream` responses (sending an `Accept`
+  header that covers both, so spec-compliant servers don't reject with 406).
 - If a backend MCP server dies **mid-session**, calls routed to it fail with a
   "backend connection closed" error (the other backends keep working), and its
   tools may still appear in the (cached) tool list until the proxy restarts. The
