@@ -6,6 +6,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-09
+
+### Fixed
+- **HTTP backends with spec-compliant MCP servers no longer fail with `406 Not
+  Acceptable`.** The proxy sent `Accept: application/json` to HTTP backend MCP
+  servers, but the MCP Streamable HTTP spec requires the client to accept
+  `text/event-stream` too — so a strict server (the official MCP SDK transport)
+  returned **406 Not Acceptable**, the backend's `initialize`/`tools/list`
+  failed, the backend was skipped, and **zero tools were exposed**. In Claude
+  Desktop that surfaced as the extension being installed + enabled but Claude
+  seeing no tools ("never heard of it"). The proxy now sends
+  `Accept: application/json, text/event-stream` and parses **both** an
+  `application/json` single response and a `text/event-stream` SSE response
+  (extracting the JSON-RPC message from the `data:` field). No configuration
+  change needed; re-enable the extension after upgrading.
+- Corrected a version drift: the proxy binary now reports its real version
+  (`0.1.2`) instead of a stale `0.1.0`.
+
 ## [0.1.1] - 2026-06-06
 
 ### Fixed

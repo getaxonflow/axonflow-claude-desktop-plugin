@@ -154,6 +154,70 @@ func TestHTTPBackend_ListAndCall(t *testing.T) {
 	}
 }
 
+// Regression: spec-compliant MCP servers (the official SDK Streamable-HTTP
+// transport) return 406 Not Acceptable unless the client accepts
+// text/event-stream, and may reply with an SSE stream. The proxy must accept
+// both and parse the SSE body — otherwise every real backend lists 0 tools.
+func TestHTTPBackend_StreamableHTTP_AcceptAndSSE(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			http.Error(w, "Not Acceptable: requires text/event-stream", http.StatusNotAcceptable)
+			return
+		}
+		var req JSONRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		var result string
+		switch req.Method {
+		case "initialize":
+			result = `{"protocolVersion":"2025-06-18"}`
+		case "tools/list":
+			result = `{"tools":[{"name":"get_user"}]}`
+		default:
+			result = `{}`
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		// SSE framing: an unrelated notification event first, then the response.
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n"))
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":" + string(req.ID) + ",\"result\":" + result + "}\n\n"))
+	}))
+	defer srv.Close()
+
+	b := newHTTPBackend(BackendConfig{ID: "strict", URL: srv.URL})
+	ctx := context.Background()
+	if err := b.Initialize(ctx); err != nil {
+		t.Fatalf("initialize against strict SSE backend failed (406/accept regression): %v", err)
+	}
+	tools, err := b.ListTools(ctx)
+	if err != nil || len(tools) != 1 {
+		t.Fatalf("tools/list against strict SSE backend: err=%v tools=%v (want 1)", err, tools)
+	}
+}
+
+func TestDecodeBackendResponse(t *testing.T) {
+	// application/json single response
+	r, err := decodeBackendResponse("application/json", strings.NewReader(`{"jsonrpc":"2.0","id":7,"result":{"ok":true}}`), "7")
+	if err != nil || r.Result == nil {
+		t.Fatalf("json: err=%v r=%+v", err, r)
+	}
+	// SSE: skip a notification, return the id-matched response
+	sse := "event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}\n\n" +
+		"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"ok\":true}}\n\n"
+	r, err = decodeBackendResponse("text/event-stream; charset=utf-8", strings.NewReader(sse), "7")
+	if err != nil || r.Result == nil || string(r.ID) != "7" {
+		t.Fatalf("sse: err=%v r=%+v", err, r)
+	}
+	// SSE multi-line data field (joined with "\n" per the spec)
+	multi := "data: {\"jsonrpc\":\"2.0\",\"id\":7,\n" + "data: \"result\":{\"ok\":true}}\n\n"
+	if r, err = decodeBackendResponse("text/event-stream", strings.NewReader(multi), "7"); err != nil || r.Result == nil {
+		t.Fatalf("sse multiline: err=%v r=%+v", err, r)
+	}
+	// SSE with no response payload → explicit error, not a nil deref
+	if _, err = decodeBackendResponse("text/event-stream", strings.NewReader("event: ping\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"n\"}\n\n"), "7"); err == nil {
+		t.Fatalf("expected error when SSE carries no response")
+	}
+}
+
 func TestHTTPBackend_ErrorStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
