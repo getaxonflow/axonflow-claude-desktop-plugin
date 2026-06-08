@@ -332,6 +332,9 @@ type httpBackend struct {
 	client *http.Client
 	idM    sync.Mutex
 	nextID int
+
+	sessM     sync.Mutex
+	sessionID string // Mcp-Session-Id assigned by a stateful backend at initialize
 }
 
 func newHTTPBackend(c BackendConfig) *httpBackend {
@@ -340,9 +343,25 @@ func newHTTPBackend(c BackendConfig) *httpBackend {
 
 func (b *httpBackend) ID() string { return b.cfg.ID }
 
-// Initialize is a no-op handshake for the stateless HTTP shape: each POST is
-// self-contained, so there's no session to establish. We still validate
-// reachability by issuing the initialize call and surfacing a transport error.
+func (b *httpBackend) getSession() string {
+	b.sessM.Lock()
+	defer b.sessM.Unlock()
+	return b.sessionID
+}
+
+func (b *httpBackend) setSession(id string) {
+	b.sessM.Lock()
+	defer b.sessM.Unlock()
+	b.sessionID = id
+}
+
+// Initialize runs the MCP lifecycle handshake against an HTTP backend. The MCP
+// Streamable HTTP spec lets a server run STATEFUL: it returns an
+// `Mcp-Session-Id` header on the initialize response and then 400s any later
+// request that doesn't echo it (the official MCP SDK does this by default).
+// post() captures that id and replays it on every subsequent request, and we
+// send the `notifications/initialized` lifecycle notification here (matching
+// the stdio backend). Stateless servers omit the header and are unaffected.
 func (b *httpBackend) Initialize(ctx context.Context) error {
 	resp, err := b.post(ctx, "initialize", map[string]interface{}{
 		"protocolVersion": backendProtocolVersion,
@@ -354,6 +373,44 @@ func (b *httpBackend) Initialize(ctx context.Context) error {
 	}
 	if resp.Error != nil {
 		return &rpcError{Code: resp.Error.Code, Message: resp.Error.Message, Data: resp.Error.Data}
+	}
+	// Best-effort lifecycle notification (carries the captured session id). A
+	// server that doesn't require it returns 202/empty; a failure here must not
+	// block tool aggregation.
+	if err := b.postNotify(ctx, "notifications/initialized", map[string]interface{}{}); err != nil {
+		logStderr("backend %q initialized notification (non-fatal): %v", b.cfg.ID, err)
+	}
+	return nil
+}
+
+// postNotify sends a JSON-RPC notification (no id, no response expected) to an
+// HTTP backend, echoing the session id. Notifications get 202 Accepted (often
+// with an empty body), so unlike post() it does not parse a JSON-RPC response.
+func (b *httpBackend) postNotify(ctx context.Context, method string, params interface{}) error {
+	reqBody, err := json.Marshal(JSONRPCRequest{JSONRPC: "2.0", Method: method, Params: mustRaw(params)})
+	if err != nil {
+		return fmt.Errorf("marshal notification: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, b.cfg.URL, bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("create notification request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	if sid := b.getSession(); sid != "" {
+		httpReq.Header.Set("Mcp-Session-Id", sid)
+	}
+	resp, err := b.client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("post notification: %w", err)
+	}
+	// A notification expects no JSON-RPC response (servers return 202/empty).
+	// Don't drain the body — a misbehaving server that holds the response
+	// stream open could otherwise block aggregation (no client timeout); just
+	// close it (the connection won't be pooled, which is fine for a one-shot).
+	_ = resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("notification returned HTTP %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -411,6 +468,12 @@ func (b *httpBackend) post(ctx context.Context, method string, params interface{
 	// absent, so accepting only application/json silently breaks every real
 	// backend — the symptom is a backend that never lists any tools.
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	// Echo the session id on every request after initialize. A stateful
+	// Streamable-HTTP backend assigns it at initialize and 400s requests that
+	// omit it; stateless backends never set one, so this is empty and harmless.
+	if sid := b.getSession(); sid != "" {
+		httpReq.Header.Set("Mcp-Session-Id", sid)
+	}
 	if traceparent != "" {
 		httpReq.Header.Set("Traceparent", traceparent)
 	}
@@ -420,6 +483,12 @@ func (b *httpBackend) post(ctx context.Context, method string, params interface{
 		return nil, fmt.Errorf("backend %q post: %w", b.cfg.ID, err)
 	}
 	defer resp.Body.Close()
+
+	// Capture the session id a stateful backend hands back (typically on the
+	// initialize response) so subsequent requests can replay it.
+	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" && b.getSession() == "" {
+		b.setSession(sid)
+	}
 
 	// Bound total bytes read regardless of response shape.
 	limited := io.LimitReader(resp.Body, maxDecideResponseBytes)
