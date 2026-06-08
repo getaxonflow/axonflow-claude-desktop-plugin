@@ -6,6 +6,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-06-09
+
+### Fixed
+- **Stateful HTTP backend MCP servers no longer fail with `400` after a `200`
+  initialize.** The MCP Streamable HTTP spec lets a server run stateful: it
+  returns an `Mcp-Session-Id` header on the `initialize` response and then
+  rejects any later request that doesn't echo it with **`400 Bad Request`**
+  ("No valid session ID provided"). The official MCP SDK does this by default.
+  The proxy treated HTTP backends as stateless — it never captured or replayed
+  the session id — so `initialize` succeeded (200) but `tools/list` was
+  rejected (400), the backend was skipped, and **0 tools** were exposed (Claude
+  Desktop showed the extension enabled but with no tools). The proxy now
+  captures `Mcp-Session-Id` from the `initialize` response, replays it on every
+  subsequent request, and sends the `notifications/initialized` lifecycle
+  notification (matching the stdio backend). Stateless backends omit the header
+  and are unaffected. Follow-on to the v0.1.2 `406` fix.
+
 ## [0.1.2] - 2026-06-09
 
 ### Fixed

@@ -218,6 +218,55 @@ func TestDecodeBackendResponse(t *testing.T) {
 	}
 }
 
+// Regression: a STATEFUL Streamable-HTTP backend (official MCP SDK default)
+// returns an Mcp-Session-Id on initialize and 400s any later request that
+// doesn't echo it. The proxy must capture and replay the session id — symptom
+// otherwise is "200 (initialize) then 400 (tools/list) → 0 tools".
+func TestHTTPBackend_StatefulSession(t *testing.T) {
+	const sid = "sess-abc123"
+	var sawInitialized bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req JSONRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.isNotification() { // notifications/initialized → 202, no body
+			if req.Method == "notifications/initialized" {
+				sawInitialized = true
+			}
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if req.Method == "initialize" {
+			w.Header().Set("Mcp-Session-Id", sid)
+			writeHTTP(w, req.ID, json.RawMessage(`{"protocolVersion":"2025-06-18"}`), nil)
+			return
+		}
+		if r.Header.Get("Mcp-Session-Id") != sid {
+			http.Error(w, `{"jsonrpc":"2.0","error":{"code":-32600,"message":"No valid session ID provided"}}`, http.StatusBadRequest)
+			return
+		}
+		if req.Method == "tools/list" {
+			writeHTTP(w, req.ID, json.RawMessage(`{"tools":[{"name":"lookup_customer"}]}`), nil)
+		}
+	}))
+	defer srv.Close()
+
+	b := newHTTPBackend(BackendConfig{ID: "stateful", URL: srv.URL})
+	ctx := context.Background()
+	if err := b.Initialize(ctx); err != nil {
+		t.Fatalf("initialize against stateful backend: %v", err)
+	}
+	if b.getSession() != sid {
+		t.Fatalf("session id not captured: got %q want %q", b.getSession(), sid)
+	}
+	if !sawInitialized {
+		t.Fatalf("notifications/initialized was not sent")
+	}
+	tools, err := b.ListTools(ctx)
+	if err != nil || len(tools) != 1 {
+		t.Fatalf("tools/list against stateful backend (session-id replay): err=%v tools=%v", err, tools)
+	}
+}
+
 func TestHTTPBackend_ErrorStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
