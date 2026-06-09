@@ -43,3 +43,6 @@ runtime-e2e/cli-harness/backend/backend
 # Python bytecode from local test runs
 __pycache__/
 *.pyc
+
+# Local-only Enterprise license for the CLI-harness E2E (fetched from AWS SM)
+runtime-e2e/cli-harness/*.license

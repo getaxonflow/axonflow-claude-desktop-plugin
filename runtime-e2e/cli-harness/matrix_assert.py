@@ -190,12 +190,17 @@ for cid, (label, want_verdict, cell) in CASES.items():
 
     if want_verdict == "allow":
         check("error" not in o, f"[{label}] verdict=allow (no JSON-RPC error)")
+        # v0.2.0 delegates response redaction to the engine's /check-output, which
+        # masks with asterisk runs (e.g. "31**********0001"); the legacy local
+        # redactor used "[REDACTED:<cat>]" tokens. Accept EITHER as the masking
+        # signature so the assertion tracks the engine-backed format.
+        masked = ("[REDACTED:" in body) or ("**" in body)
         if cell in ("response-only", "both"):
-            # redaction tokens must be present (PII was masked, not dropped).
-            check("[REDACTED:" in body, f"[{label}] redaction token present (PII masked)")
+            # PII must have been masked, not dropped.
+            check(masked, f"[{label}] PII masked (engine asterisk or legacy token)")
         if cell in ("neither", "request-only"):
             # no over-redaction of benign data.
-            check("[REDACTED:" not in body, f"[{label}] benign response not over-redacted")
+            check(not masked, f"[{label}] benign response not over-redacted")
     elif want_verdict == "deny":
         code = o.get("error", {}).get("code")
         check(code == -32001, f"[{label}] blocked with -32001 (got {code})")

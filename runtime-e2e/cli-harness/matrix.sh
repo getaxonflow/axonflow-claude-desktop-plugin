@@ -43,7 +43,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 COMPOSE="$HERE/docker-compose.yml"
 PROJECT="${COMPOSE_PROJECT:-sh-e2e-matrix}"
-ORG="${AXONFLOW_ORG_ID:-bukuwarung}"
+ORG="${AXONFLOW_ORG_ID:-bukuwarung-eval}"
 LEADER="${AXONFLOW_LEADER_EMAIL:-ben.jonathan@bukuwarung.test}"
 ENDPOINT="${AXONFLOW_ENDPOINT:-http://localhost:8080}"
 FOREIGN_TENANT="${FOREIGN_TENANT:-acme-corp}"
@@ -134,7 +134,23 @@ for _ in $(seq 1 60); do
 done
 echo ""
 [ "$tier" = "Enterprise" ] || { echo "FATAL: agent did not recover after breaker reset"; exit 1; }
-sleep 2
+
+# /health flips to Enterprise BEFORE the response-governance subsystem is ready
+# (the agent serves /health early; see agent-serves-health-before-migrations).
+# Driving now races check-output → early cases fail-closed (-32003). Gate on the
+# RESPONSE plane actually answering 200, not just /health, before driving.
+echo -n "    waiting for check-output (response plane) to answer 200"
+co_auth="$(printf %s "$ORG:$AXONFLOW_LICENSE_KEY" | base64 | tr -d '\n')"
+for _ in $(seq 1 40); do
+  code="$(curl -s -o /dev/null -m 4 -w '%{http_code}' -X POST "$ENDPOINT/api/v1/mcp/check-output" \
+    -H "Authorization: Basic $co_auth" -H "Content-Type: application/json" \
+    -d "{\"message\":\"warmup\",\"connector_type\":\"claude-desktop-proxy\",\"tenant_id\":\"$ORG\"}" 2>/dev/null || true)"
+  [ "$code" = "200" ] && break
+  echo -n "."; sleep 2
+done
+echo " ($code)"
+[ "$code" = "200" ] || { echo "FATAL: check-output never reached 200 (got '$code')"; exit 1; }
+sleep 1
 
 # --- 4. generate the exact-arg JSON-RPC request streams --------------------
 # Python writes the request files so exact SQL/injection strings keep their

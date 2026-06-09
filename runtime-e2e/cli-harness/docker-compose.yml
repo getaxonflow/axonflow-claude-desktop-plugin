@@ -51,7 +51,9 @@ services:
       # run.sh enforces that this is set (and that /health reports Enterprise);
       # the default is empty so `docker compose down` works without the env.
       AXONFLOW_LICENSE_KEY: ${AXONFLOW_LICENSE_KEY:-}
-      ORG_ID: bukuwarung
+      # Must match the issued partner license's org_id (bukuwarung-eval), else
+      # the agent refuses to boot on an org mismatch. Override with HARNESS_ORG.
+      ORG_ID: ${HARNESS_ORG:-bukuwarung-eval}
       AXONFLOW_DB_USE_APP_ROLE: "false"
       AXONFLOW_PROFILE: strict
       SQLI_ACTION: block
