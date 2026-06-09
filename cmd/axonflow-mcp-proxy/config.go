@@ -160,6 +160,11 @@ func LoadConfig() (Config, error) {
 	// than silently defaulting (a typo'd "alway" must not quietly disable a
 	// compliance control).
 	cfg.RedactResponses = strings.ToLower(envOr("AXONFLOW_REDACT_RESPONSES", redactAlways))
+	// Accept the underscore spelling as an alias for the canonical hyphenated
+	// value so "on_obligation" and "on-obligation" both resolve identically.
+	if cfg.RedactResponses == "on_obligation" {
+		cfg.RedactResponses = redactOnObligation
+	}
 	switch cfg.RedactResponses {
 	case redactAlways, redactOnObligation, redactOff:
 	default:

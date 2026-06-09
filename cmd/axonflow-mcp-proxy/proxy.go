@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,13 +23,15 @@ type route struct {
 
 // Proxy is the governance MCP server. It fronts N backend MCP servers, checks
 // every tools/call against Decision Mode before forwarding, redacts PII from
-// responses on the redact_pii obligation, and audits every call. It is BOTH an
-// MCP server to Claude Desktop and an MCP client to each backend.
+// responses through the authoritative engine (check-output), and audits every
+// call. It is BOTH an MCP server to Claude Desktop and an MCP client to each
+// backend.
 type Proxy struct {
-	cfg      Config
-	decide   *DecideClient
-	audit    *AuditLogger
-	backends map[string]Backend
+	cfg         Config
+	decide      *DecideClient
+	checkOutput *CheckOutputClient
+	audit       *AuditLogger
+	backends    map[string]Backend
 	// backendOrder preserves config order so aggregated tool lists are
 	// deterministic (config order, then tool order within a backend).
 	backendOrder []string
@@ -44,11 +46,12 @@ type Proxy struct {
 // yet started — Aggregate (or the first tools/list) starts + initializes them.
 func NewProxy(cfg Config) (*Proxy, error) {
 	p := &Proxy{
-		cfg:      cfg,
-		decide:   NewDecideClient(cfg),
-		audit:    NewAuditLogger(cfg.AuditLogPath),
-		backends: map[string]Backend{},
-		routes:   map[string]route{},
+		cfg:         cfg,
+		decide:      NewDecideClient(cfg),
+		checkOutput: NewCheckOutputClient(cfg),
+		audit:       NewAuditLogger(cfg.AuditLogPath),
+		backends:    map[string]Backend{},
+		routes:      map[string]route{},
 	}
 	for _, bc := range cfg.Backends {
 		b, err := NewBackend(bc)
@@ -330,14 +333,20 @@ func (p *Proxy) enforce(ctx context.Context, id json.RawMessage, params ToolCall
 	}
 }
 
-// forwardAndRedact forwards an allowed call to its backend and scans the
-// response for PII before returning it to Claude. By default (RedactResponses
-// == "always") the scan is UNCONDITIONAL — the proxy is the only component that
-// ever sees a tool response, so stripping PII out of it can't be gated on a PDP
-// obligation the agent would have to have attached. forced=true marks a
-// fail-open / unknown-verdict forward (no explicit allow verdict); it still
-// triggers redaction even under the legacy "on-obligation" mode so a fail-open
-// posture never leaks PII into the context window.
+// forwardAndRedact forwards an allowed call to its backend and runs the
+// response through the authoritative engine (check-output) for PII redaction
+// before returning it to Claude. By default (RedactResponses == "always") the
+// scan is UNCONDITIONAL — the proxy is the only component that ever sees a tool
+// response, so stripping PII out of it can't be gated on a PDP obligation the
+// agent would have to have attached. forced=true marks a fail-open /
+// unknown-verdict forward (no explicit allow verdict); it still triggers
+// redaction even under the legacy "on-obligation" mode so a fail-open posture
+// never leaks PII into the context window.
+//
+// FAIL-CLOSED: if the engine is unreachable or errors, the (already-executed)
+// response is NOT forwarded — a network hiccup must never leak un-redacted PII
+// into Claude's context. This is the load-bearing difference from the deleted
+// local redactor, which kept "redacting" even with the PDP down.
 func (p *Proxy) forwardAndRedact(ctx context.Context, id json.RawMessage, r route, params ToolCallParams, decision DecideResponse, forced bool) callOutcome {
 	out := callOutcome{
 		verdict:           firstNonEmpty(decision.Verdict, verdictAllow),
@@ -373,24 +382,102 @@ func (p *Proxy) forwardAndRedact(ctx context.Context, id json.RawMessage, r rout
 		return out
 	}
 
-	// Scan the response for PII before it enters Claude's context window. This is
-	// the §4.3 control. Default-on: every response is scanned regardless of
-	// verdict/obligation, because the agent never sees the response — so the
-	// proxy can't outsource the decision to "did the PDP flag the request?".
-	// (A clean, allow-with-no-obligation request whose response still carries PII
-	// is exactly the case obligation-gating used to leak.)
+	// Scan the response for PII through the authoritative engine before it enters
+	// Claude's context window. This is the §4.3 control. Default-on: every
+	// response is scanned regardless of verdict/obligation, because the agent
+	// never sees the response — so the proxy can't outsource the decision to "did
+	// the PDP flag the request?". (A clean, allow-with-no-obligation request whose
+	// response still carries PII is exactly the case obligation-gating used to
+	// leak.) The engine call uses the request context bounded by the client's own
+	// timeout, not callCtx, so a slow backend doesn't starve the redaction call.
 	if p.shouldRedact(decision, forced) {
-		redacted, summary := redactResult(result)
+		redacted, count, rerr := p.redactResponse(ctx, result, traceparent(decision.TraceID))
+		if rerr != nil {
+			// Never forward an unredacted (or un-scannable) response.
+			return p.redactionFailClosed(id, out, rerr)
+		}
 		result = redacted
-		out.redactionCount = summary.Count
-		if summary.Count > 0 {
-			logStderr("redacted %d PII span(s) from %s response: %v", summary.Count, r.originalName, redactionByTypeSorted(summary.ByType))
+		out.redactionCount = count
+		if count > 0 {
+			logStderr("engine redacted %d PII span(s) from %s response", count, r.originalName)
 		}
 	}
 
 	out.recordCount = countRecords(result)
 	out.response = JSONRPCResponse{JSONRPC: "2.0", ID: id, Result: result}
 	return out
+}
+
+// redactResponse submits the tool result to the authoritative engine
+// (check-output) and returns the redacted result plus an estimated masked-span
+// count. It is FAIL-CLOSED: any error is propagated so the caller blocks rather
+// than forwarding an unredacted response.
+//
+// The whole serialized result is submitted as the execute-style `message`, so
+// the engine's PII detectors scan every value (string OR number, at any nesting
+// depth — a NIK serialized as a JSON number appears as a digit run in the
+// message and is caught) plus object keys. The engine returns the masked text,
+// which the proxy re-validates as JSON before forwarding (a mask that broke the
+// JSON structure must not corrupt the MCP result, and forwarding the original
+// would leak PII — so an invalid result fails closed too).
+func (p *Proxy) redactResponse(ctx context.Context, result json.RawMessage, tp string) (json.RawMessage, int, error) {
+	if len(bytes.TrimSpace(result)) == 0 {
+		return result, 0, nil // empty result — nothing to scan
+	}
+	res, err := p.checkOutput.CheckOutput(ctx, string(result), tp)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !res.WasRedacted {
+		return result, 0, nil // engine found nothing to redact
+	}
+	redacted := []byte(res.RedactedText)
+	if !json.Valid(redacted) {
+		return nil, 0, fmt.Errorf("engine-redacted response is not valid JSON; failing closed")
+	}
+	return json.RawMessage(redacted), maskSpanCount(res.RedactedText), nil
+}
+
+// redactionFailClosed turns a response-governance failure into a blocked
+// outcome — the tool already executed, but its response is NOT forwarded to
+// Claude. A policy block surfaces as a deny (-32001) with the engine's reason; a
+// transport/availability failure surfaces as policy-unavailable (-32003),
+// matching the request-side fail-closed posture so the JSON-RPC contract is
+// uniform across both planes.
+func (p *Proxy) redactionFailClosed(id json.RawMessage, out callOutcome, err error) callOutcome {
+	out.verdict = verdictDeny
+	out.redactionCount = 0
+	out.recordCount = 0
+	if be, ok := asOutputBlocked(err); ok {
+		if be.DecisionID != "" {
+			out.decisionID = be.DecisionID
+		}
+		reason := be.Reason
+		if reason == "" {
+			reason = "response blocked by output policy"
+		}
+		logStderr("response BLOCKED by output policy (not forwarded): %s", reason)
+		out.response = errorResponse(id, codePolicyDeny, reason)
+		return out
+	}
+	logStderr("response governance unavailable — failing closed (response NOT forwarded): %v", err)
+	out.response = errorResponse(id, codePolicyUnavailable, "response governance unavailable; response not forwarded (fail-closed)")
+	return out
+}
+
+// maskSpanCount estimates how many PII spans the engine masked, for the Layer-1
+// audit redaction_count. The engine doesn't return a span count, so this counts
+// the canonical "[REDACTED" mask tokens the static engine emits; when redaction
+// is known to have happened but carried no such token (e.g. the Indonesia
+// detector's partial NN****NN mask), the count is reported as at least 1 so the
+// audit row still records that redaction occurred. maskSpanCount is only called
+// when the engine reported a redaction, so the floor of 1 is never a false
+// positive.
+func maskSpanCount(redacted string) int {
+	if n := strings.Count(redacted, "[REDACTED"); n > 0 {
+		return n
+	}
+	return 1
 }
 
 // shouldRedact decides whether the response redactor runs for this forward,
@@ -476,122 +563,6 @@ func countRecords(result json.RawMessage) int {
 		return total
 	}
 	return len(m.Content)
-}
-
-// redactResult walks a tool result and masks PII in every scalar leaf —
-// string and numeric VALUES, and object KEYS (a record keyed by a NIK would
-// otherwise leak it). This covers content[].text, structuredContent, and any
-// nested object/array.
-//
-// Known limitations (see redact.go "Coverage & limitations" and the README
-// "Scope & boundaries" — stated plainly rather than implied away):
-//   - PII split across separate array elements (["3174","0125","0990","0001"])
-//     reassembles in Claude's reading but is not caught span-by-span.
-//   - base64/hex-encoded or otherwise transformed PII is not decoded, so it is
-//     not matched.
-//
-// The platform PDP at the gate remains the authoritative detector; this is a
-// last-line response filter, not a complete DLP engine. Returns the redacted
-// JSON and a summary.
-func redactResult(result json.RawMessage) (json.RawMessage, RedactionResult) {
-	var v interface{}
-	// UseNumber so numeric leaves keep their exact digits (a 16-digit NIK or a
-	// 19-digit card exceeds float64's integer precision) — the redactor matches
-	// on the exact digit string, not a rounded float.
-	dec := json.NewDecoder(bytes.NewReader(result))
-	dec.UseNumber()
-	if err := dec.Decode(&v); err != nil {
-		// Unparseable result (shouldn't happen for valid MCP) — redact the raw
-		// string form as a last-line defense rather than passing it through.
-		redacted, summary := RedactText(string(result))
-		return json.RawMessage(mustJSONString(redacted)), summary
-	}
-	summary := RedactionResult{ByType: map[string]int{}}
-	redacted := redactValue(v, &summary)
-	out, err := json.Marshal(redacted)
-	if err != nil {
-		return result, summary
-	}
-	return out, summary
-}
-
-// redactValue recursively masks PII in scalar leaves, accumulating into
-// summary. Strings AND numbers are scanned: a backend that returns a NIK / card
-// / phone as a JSON *number* (e.g. {"nik":3174012509900001}) must not slip past
-// redaction — otherwise the §4.3 "no PII reaches the context" claim would hold
-// only for string-typed PII. A number that matches is replaced with its mask
-// token (string); a number that doesn't match is returned unchanged so its type
-// and precision are preserved.
-func redactValue(v interface{}, summary *RedactionResult) interface{} {
-	switch t := v.(type) {
-	case string:
-		return redactScalarString(t, v, summary)
-	case float64:
-		return redactScalarString(strconv.FormatFloat(t, 'f', -1, 64), v, summary)
-	case json.Number:
-		return redactScalarString(t.String(), v, summary)
-	case map[string]interface{}:
-		// Redact both keys and values. A record keyed by PII — e.g.
-		// {"3174012509900001": {...}} — would leak the key if only values were
-		// scanned. Build a new map so keys can be rewritten safely; on the rare
-		// case where two distinct keys mask to the same token, suffix to avoid
-		// silently dropping a record.
-		out := make(map[string]interface{}, len(t))
-		for k, val := range t {
-			rv := redactValue(val, summary)
-			rk := redactMapKey(k, summary)
-			if _, clash := out[rk]; clash && rk != k {
-				for i := 1; ; i++ {
-					cand := fmt.Sprintf("%s#%d", rk, i)
-					if _, exists := out[cand]; !exists {
-						rk = cand
-						break
-					}
-				}
-			}
-			out[rk] = rv
-		}
-		return out
-	case []interface{}:
-		for i, val := range t {
-			t[i] = redactValue(val, summary)
-		}
-		return t
-	default:
-		return v
-	}
-}
-
-// redactScalarString runs the redactor over the string form s of leaf value
-// orig. If anything matched it accumulates the counts and returns the redacted
-// string (the leaf's type may change number→string — acceptable for a mask);
-// otherwise it returns orig unchanged so non-PII leaves keep their original
-// type and precision.
-func redactScalarString(s string, orig interface{}, summary *RedactionResult) interface{} {
-	red, r := RedactText(s)
-	if r.Count == 0 {
-		return orig
-	}
-	summary.Count += r.Count
-	for k, n := range r.ByType {
-		summary.ByType[k] += n
-	}
-	return red
-}
-
-// redactMapKey runs the redactor over an object key and returns the masked key
-// (accumulating the counts) so a record keyed by PII doesn't leak the key.
-// Returns the key unchanged when nothing matched.
-func redactMapKey(k string, summary *RedactionResult) string {
-	red, r := RedactText(k)
-	if r.Count == 0 {
-		return k
-	}
-	summary.Count += r.Count
-	for t, n := range r.ByType {
-		summary.ByType[t] += n
-	}
-	return red
 }
 
 // firstNonEmpty returns a if non-empty else b.

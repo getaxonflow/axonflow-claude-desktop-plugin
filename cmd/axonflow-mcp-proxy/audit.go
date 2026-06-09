@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 )
@@ -45,8 +44,11 @@ type AuditRow struct {
 	// Layer-2 evidence: the AI-agent + gateway identity forwarded to the PDP.
 	AIAgent   string `json:"ai_agent"`
 	GatewayID string `json:"gateway_id"`
-	// RedactionCount is the number of PII spans stripped from the response
-	// before it reached Claude's context (0 when no redact obligation fired).
+	// RedactionCount estimates how many PII spans the authoritative engine
+	// (check-output) masked in the response before it reached Claude's context
+	// (0 when the engine redacted nothing). It is a best-effort count of the
+	// engine's mask tokens — the engine returns the redacted text, not a span
+	// count — and is >=1 whenever any redaction occurred. See maskSpanCount.
 	RedactionCount int `json:"redaction_count"`
 }
 
@@ -158,19 +160,4 @@ func (a *AuditLogger) Close() error {
 		return err
 	}
 	return nil
-}
-
-// redactionByTypeSorted renders a ByType map as a stable "type:count" list for
-// human-readable logging (deterministic order for test assertions).
-func redactionByTypeSorted(m map[string]int) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		out = append(out, fmt.Sprintf("%s:%d", k, m[k]))
-	}
-	return out
 }

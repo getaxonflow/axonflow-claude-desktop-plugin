@@ -115,7 +115,7 @@ func TestLoadConfig_RedactResponses_DefaultAndParsing(t *testing.T) {
 	}
 
 	// Each valid mode parses (case-insensitively).
-	for in, want := range map[string]string{"always": redactAlways, "on-obligation": redactOnObligation, "off": redactOff, "OFF": redactOff} {
+	for in, want := range map[string]string{"always": redactAlways, "on-obligation": redactOnObligation, "on_obligation": redactOnObligation, "off": redactOff, "OFF": redactOff} {
 		t.Setenv("AXONFLOW_REDACT_RESPONSES", in)
 		cfg, err := LoadConfig()
 		if err != nil {
