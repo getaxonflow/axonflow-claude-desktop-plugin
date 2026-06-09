@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -376,6 +377,17 @@ func (p *Proxy) forwardAndRedact(ctx context.Context, id json.RawMessage, r rout
 		if asRPCError(err, &re) {
 			// Backend returned a JSON-RPC error — propagate code + message.
 			out.response = JSONRPCResponse{JSONRPC: "2.0", ID: id, Error: &JSONRPCError{Code: re.Code, Message: re.Message, Data: re.Data}}
+			return out
+		}
+		// A backend that's down / mid-restart (the stdioBackend already tried to
+		// reconnect once and a fresh connect is still failing) surfaces a clean,
+		// RETRYABLE error rather than a hard dead-session — the next tools/call
+		// will attempt the reconnect again. The call WAS governed (decide ran
+		// above); nothing is ever forwarded ungoverned during the reconnect
+		// window, because this forward step only runs after an allow verdict.
+		var unavailable *backendUnavailableError
+		if errors.As(err, &unavailable) {
+			out.response = errorResponse(id, codeInternalError, unavailable.Error())
 			return out
 		}
 		out.response = errorResponse(id, codeInternalError, fmt.Sprintf("backend %q unavailable: %v", r.backendID, err))

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // backendProtocolVersion is the MCP protocol version the proxy advertises to
@@ -71,16 +72,53 @@ func NewBackend(c BackendConfig) (Backend, error) {
 // stdio backend
 // ---------------------------------------------------------------------------
 
-// stdioBackend launches a backend MCP server as a child process and speaks
-// newline-delimited JSON-RPC over its stdin/stdout. A single reader goroutine
-// demultiplexes responses to per-request channels keyed by request id; server
-// notifications (no id) are logged and dropped.
-type stdioBackend struct {
-	cfg BackendConfig
+// reconnect tuning. A backend MCP server restarted out-of-band (an operator
+// redeploy, a crash) drops its stdio session; the proxy re-spawns and
+// re-handshakes it transparently on the next call. To avoid busy-respawning a
+// backend that is genuinely down, consecutive failed (re)connects back off
+// exponentially from reconnectBackoffBase up to reconnectBackoffMax — a call
+// arriving inside the backoff window gets a fast, clean "unavailable" error
+// instead of triggering another spawn. A successful connect resets the backoff.
+const (
+	reconnectBackoffBase = 500 * time.Millisecond
+	reconnectBackoffMax  = 30 * time.Second
+	// handshakeTimeout bounds a single spawn+initialize so a backend that starts
+	// but never finishes the MCP handshake can't wedge the (mutex-held) reconnect.
+	handshakeTimeout = 15 * time.Second
+)
 
-	startOnce sync.Once
-	startErr  error
+// backendUnavailableError is returned when the proxy cannot (re)establish a
+// backend stdio session — either the backend is down and the call arrived inside
+// the reconnect backoff window, or a fresh spawn/handshake just failed. It is a
+// distinct, clean error type (not a bare dead-pipe / EOF error) so the proxy can
+// surface a RETRYABLE failure to Claude rather than a hard dead-session: the next
+// tools/call attempts the reconnect again once the backoff elapses.
+type backendUnavailableError struct {
+	id         string
+	retryAfter time.Duration
+	cause      error
+}
 
+func (e *backendUnavailableError) Error() string {
+	if e.retryAfter > 0 {
+		return fmt.Sprintf("backend %q is unavailable (restarting); retry in %s", e.id, e.retryAfter.Round(100*time.Millisecond))
+	}
+	if e.cause != nil {
+		return fmt.Sprintf("backend %q is unavailable: %v", e.id, e.cause)
+	}
+	return fmt.Sprintf("backend %q is unavailable", e.id)
+}
+
+func (e *backendUnavailableError) Unwrap() error { return e.cause }
+
+// stdioConn is ONE live connection to a backend stdio MCP server: a child
+// process plus the reader goroutine that demultiplexes its responses. A backend
+// restart kills the process, the reader hits EOF and marks this conn dead, and
+// stdioBackend then spawns a fresh stdioConn. Each connection owns its own
+// request-id space, pending map, and closed signal, so a stale conn can never
+// deliver a response onto a fresh one.
+type stdioConn struct {
+	id     string // backend id, for log/error messages
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	writeM sync.Mutex // serializes line writes to the child's stdin
@@ -89,62 +127,69 @@ type stdioBackend struct {
 	nextID  int
 	pending map[string]chan *JSONRPCResponse
 
-	closed chan struct{}
+	closed   chan struct{}
+	deadOnce sync.Once
+}
+
+// stdioBackend fronts a backend stdio MCP server, transparently reconnecting a
+// dropped session. The current live connection is held in conn (nil when none
+// has been established or the last one died); mu serializes (re)connect so a
+// burst of concurrent calls against a dead backend triggers exactly one respawn.
+type stdioBackend struct {
+	cfg BackendConfig
+
+	mu        sync.Mutex // guards conn + backoff state; serializes (re)connect
+	conn      *stdioConn
+	backoff   time.Duration // current backoff after consecutive connect failures
+	nextRetry time.Time     // earliest wall-clock time a (re)connect may be attempted
+
+	// now is the clock, injectable so backoff behaviour is deterministic in tests.
+	now func() time.Time
 }
 
 func newStdioBackend(c BackendConfig) *stdioBackend {
-	return &stdioBackend{
-		cfg:     c,
-		pending: map[string]chan *JSONRPCResponse{},
-		closed:  make(chan struct{}),
-	}
+	return &stdioBackend{cfg: c, now: time.Now}
 }
 
 func (b *stdioBackend) ID() string { return b.cfg.ID }
 
-// start launches the child process and the reader goroutine exactly once.
-func (b *stdioBackend) start() error {
-	b.startOnce.Do(func() {
-		cmd := exec.Command(b.cfg.Command, b.cfg.Args...)
-		// Inherit the proxy env and layer the backend's env on top so a backend
-		// can receive its own credentials without leaking the proxy's.
-		cmd.Env = os.Environ()
-		for k, v := range b.cfg.Env {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
-		stdin, err := cmd.StdinPipe()
-		if err != nil {
-			b.startErr = fmt.Errorf("backend %q stdin pipe: %w", b.cfg.ID, err)
-			return
-		}
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			b.startErr = fmt.Errorf("backend %q stdout pipe: %w", b.cfg.ID, err)
-			return
-		}
-		// Forward the child's stderr to ours, prefixed, so backend logs are
-		// visible during the demo without polluting the JSON-RPC stdout channel.
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			b.startErr = fmt.Errorf("backend %q stderr pipe: %w", b.cfg.ID, err)
-			return
-		}
-		if err := cmd.Start(); err != nil {
-			b.startErr = fmt.Errorf("backend %q start %q: %w", b.cfg.ID, b.cfg.Command, err)
-			return
-		}
-		b.cmd = cmd
-		b.stdin = stdin
-		go b.readLoop(stdout)
-		go forwardStderr(b.cfg.ID, stderr)
-	})
-	return b.startErr
+// ---- connection lifecycle ----
+
+// alive reports whether the connection's reader goroutine is still running (the
+// child process has not exited).
+func (c *stdioConn) alive() bool {
+	select {
+	case <-c.closed:
+		return false
+	default:
+		return true
+	}
 }
 
-// readLoop demultiplexes backend responses to the pending channels. It runs
-// until the child's stdout closes (process exit), then fails any still-pending
-// requests so a caller never blocks forever on a dead backend.
-func (b *stdioBackend) readLoop(stdout io.Reader) {
+// markDead closes the conn exactly once, unblocking every pending caller (each
+// waits on c.closed and returns a "closed before responding" error). Idempotent
+// so the reader goroutine and an explicit shutdown can both call it.
+func (c *stdioConn) markDead() {
+	c.deadOnce.Do(func() { close(c.closed) })
+}
+
+// shutdown kills the child process (best effort) and marks the conn dead. The
+// reader goroutine reaps the process via cmd.Wait when stdout closes, so this
+// does NOT Wait (avoiding a double-Wait race). Safe to call more than once.
+func (c *stdioConn) shutdown() {
+	if c.stdin != nil {
+		_ = c.stdin.Close()
+	}
+	if c.cmd != nil && c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+	}
+	c.markDead()
+}
+
+// readLoop demultiplexes backend responses to the pending channels until the
+// child's stdout closes (process exit), then reaps the child and marks the conn
+// dead so waiting callers unblock and the backend can be reconnected.
+func (c *stdioConn) readLoop(stdout io.Reader) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxDecideResponseBytes)
 	for scanner.Scan() {
@@ -154,7 +199,7 @@ func (b *stdioBackend) readLoop(stdout io.Reader) {
 		}
 		var resp JSONRPCResponse
 		if err := json.Unmarshal(line, &resp); err != nil {
-			logStderr("backend %q: undecodable line dropped: %v", b.cfg.ID, err)
+			logStderr("backend %q: undecodable line dropped: %v", c.id, err)
 			continue
 		}
 		if len(resp.ID) == 0 || string(resp.ID) == "null" {
@@ -163,98 +208,92 @@ func (b *stdioBackend) readLoop(stdout io.Reader) {
 			continue
 		}
 		key := string(resp.ID)
-		b.idM.Lock()
-		ch, ok := b.pending[key]
+		c.idM.Lock()
+		ch, ok := c.pending[key]
 		if ok {
-			delete(b.pending, key)
+			delete(c.pending, key)
 		}
-		b.idM.Unlock()
+		c.idM.Unlock()
 		if ok {
 			ch <- &resp
 		}
 	}
-	// stdout closed → the backend process exited (crash or normal exit). Drain
-	// pending callers with a synthetic error so none block forever. The proxy
-	// does NOT auto-respawn within a session: subsequent calls routed here keep
-	// returning "backend closed" until the proxy (Claude Desktop) restarts —
-	// the degraded-until-restart contract documented in the README.
-	close(b.closed)
-	b.idM.Lock()
-	for key, ch := range b.pending {
-		delete(b.pending, key)
-		ch <- &JSONRPCResponse{Error: &JSONRPCError{Code: codeInternalError, Message: "backend connection closed"}}
+	// stdout closed → the backend process exited (crash, restart, or normal
+	// exit). Reap it to avoid a zombie, then mark the conn dead so every pending
+	// caller unblocks via the c.closed select branch. Unlike the old
+	// degraded-until-Claude-restart contract, stdioBackend now establishes a
+	// fresh connection on the next call (see ensureConn).
+	if c.cmd != nil {
+		_ = c.cmd.Wait()
 	}
-	b.idM.Unlock()
+	c.markDead()
 }
 
-// call sends a JSON-RPC request and waits for the matching response or ctx
-// cancellation. Notifications (initialized) go through send with no wait.
-func (b *stdioBackend) call(ctx context.Context, method string, params interface{}) (*JSONRPCResponse, error) {
-	if err := b.start(); err != nil {
-		return nil, err
-	}
-
-	b.idM.Lock()
-	b.nextID++
-	id := b.nextID
-	b.idM.Unlock()
+// call sends a JSON-RPC request on this connection and waits for the matching
+// response, ctx cancellation, or the connection dropping (c.closed).
+func (c *stdioConn) call(ctx context.Context, method string, params interface{}) (*JSONRPCResponse, error) {
+	c.idM.Lock()
+	c.nextID++
+	id := c.nextID
+	c.idM.Unlock()
 	idRaw := json.RawMessage(strconv.Itoa(id))
 	key := string(idRaw)
 
 	ch := make(chan *JSONRPCResponse, 1)
-	b.idM.Lock()
-	b.pending[key] = ch
-	b.idM.Unlock()
+	c.idM.Lock()
+	c.pending[key] = ch
+	c.idM.Unlock()
 
-	if err := b.writeMessage(JSONRPCRequest{JSONRPC: "2.0", ID: idRaw, Method: method, Params: mustRaw(params)}); err != nil {
-		b.idM.Lock()
-		delete(b.pending, key)
-		b.idM.Unlock()
+	if err := c.writeMessage(JSONRPCRequest{JSONRPC: "2.0", ID: idRaw, Method: method, Params: mustRaw(params)}); err != nil {
+		c.idM.Lock()
+		delete(c.pending, key)
+		c.idM.Unlock()
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
-		b.idM.Lock()
-		delete(b.pending, key)
-		b.idM.Unlock()
+		c.idM.Lock()
+		delete(c.pending, key)
+		c.idM.Unlock()
 		return nil, ctx.Err()
-	case <-b.closed:
-		b.idM.Lock()
-		delete(b.pending, key)
-		b.idM.Unlock()
-		return nil, fmt.Errorf("backend %q closed before responding", b.cfg.ID)
+	case <-c.closed:
+		c.idM.Lock()
+		delete(c.pending, key)
+		c.idM.Unlock()
+		return nil, fmt.Errorf("backend %q closed before responding", c.id)
 	case resp := <-ch:
 		return resp, nil
 	}
 }
 
 // notify sends a JSON-RPC notification (no id, no response expected).
-func (b *stdioBackend) notify(method string, params interface{}) error {
-	if err := b.start(); err != nil {
-		return err
-	}
-	return b.writeMessage(JSONRPCRequest{JSONRPC: "2.0", Method: method, Params: mustRaw(params)})
+func (c *stdioConn) notify(method string, params interface{}) error {
+	return c.writeMessage(JSONRPCRequest{JSONRPC: "2.0", Method: method, Params: mustRaw(params)})
 }
 
 // writeMessage marshals one JSON-RPC message to a single newline-terminated
 // line. The write mutex guarantees lines never interleave on the child's stdin.
-func (b *stdioBackend) writeMessage(msg interface{}) error {
+func (c *stdioConn) writeMessage(msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal message: %w", err)
 	}
 	data = append(data, '\n')
-	b.writeM.Lock()
-	defer b.writeM.Unlock()
-	if _, err := b.stdin.Write(data); err != nil {
-		return fmt.Errorf("write to backend %q: %w", b.cfg.ID, err)
+	c.writeM.Lock()
+	defer c.writeM.Unlock()
+	if _, err := c.stdin.Write(data); err != nil {
+		return fmt.Errorf("write to backend %q: %w", c.id, err)
 	}
 	return nil
 }
 
-func (b *stdioBackend) Initialize(ctx context.Context) error {
-	resp, err := b.call(ctx, "initialize", map[string]interface{}{
+// initialize runs the MCP lifecycle handshake on a freshly-spawned connection:
+// the initialize request followed by the notifications/initialized confirmation.
+// A backend that has just (re)started must complete this before tools/* work, so
+// reconnect re-runs it automatically.
+func (c *stdioConn) initialize(ctx context.Context) error {
+	resp, err := c.call(ctx, "initialize", map[string]interface{}{
 		"protocolVersion": backendProtocolVersion,
 		"capabilities":    map[string]interface{}{},
 		"clientInfo":      map[string]string{"name": "axonflow-mcp-proxy", "version": proxyVersion},
@@ -265,15 +304,176 @@ func (b *stdioBackend) Initialize(ctx context.Context) error {
 	if resp.Error != nil {
 		return &rpcError{Code: resp.Error.Code, Message: resp.Error.Message, Data: resp.Error.Data}
 	}
-	// MCP requires the client to confirm initialization before normal use.
-	if err := b.notify("notifications/initialized", map[string]interface{}{}); err != nil {
-		return fmt.Errorf("backend %q initialized notification: %w", b.cfg.ID, err)
+	if err := c.notify("notifications/initialized", map[string]interface{}{}); err != nil {
+		return fmt.Errorf("backend %q initialized notification: %w", c.id, err)
 	}
 	return nil
 }
 
+// ---- backend (re)connect orchestration ----
+
+// spawn launches the child process and its reader + stderr goroutines, returning
+// an un-initialized connection.
+func (b *stdioBackend) spawn() (*stdioConn, error) {
+	cmd := exec.Command(b.cfg.Command, b.cfg.Args...)
+	// Inherit the proxy env and layer the backend's env on top so a backend can
+	// receive its own credentials without leaking the proxy's.
+	cmd.Env = os.Environ()
+	for k, v := range b.cfg.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("backend %q stdin pipe: %w", b.cfg.ID, err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("backend %q stdout pipe: %w", b.cfg.ID, err)
+	}
+	// Forward the child's stderr to ours, prefixed, so backend logs are visible
+	// without polluting the JSON-RPC stdout channel.
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("backend %q stderr pipe: %w", b.cfg.ID, err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("backend %q start %q: %w", b.cfg.ID, b.cfg.Command, err)
+	}
+	conn := &stdioConn{
+		id:      b.cfg.ID,
+		cmd:     cmd,
+		stdin:   stdin,
+		pending: map[string]chan *JSONRPCResponse{},
+		closed:  make(chan struct{}),
+	}
+	go conn.readLoop(stdout)
+	go forwardStderr(b.cfg.ID, stderr)
+	return conn, nil
+}
+
+// connect spawns the backend and runs the handshake, returning a ready
+// connection. The handshake is bounded by handshakeTimeout from a fresh context
+// (not a caller's) so one caller cancelling can't poison the shared reconnect.
+func (b *stdioBackend) connect() (*stdioConn, error) {
+	conn, err := b.spawn()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+	defer cancel()
+	if err := conn.initialize(ctx); err != nil {
+		conn.shutdown()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// ensureConn returns a live, initialized connection, (re)spawning the backend if
+// the current connection is missing or dead. Concurrent callers serialize on mu
+// so a dead backend triggers exactly one respawn. A (re)connect attempt arriving
+// inside the backoff window returns a clean backendUnavailableError immediately
+// instead of spawning; a successful connect resets the backoff.
+func (b *stdioBackend) ensureConn() (*stdioConn, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.conn != nil && b.conn.alive() {
+		return b.conn, nil
+	}
+	// Drop a dead connection before attempting a fresh one.
+	if b.conn != nil {
+		b.conn.shutdown()
+		b.conn = nil
+	}
+	// Backoff gate: a recent failed connect means the backend is down — don't
+	// hammer it. Surface a retryable error until the window elapses.
+	if now := b.now(); now.Before(b.nextRetry) {
+		return nil, &backendUnavailableError{id: b.cfg.ID, retryAfter: b.nextRetry.Sub(now)}
+	}
+
+	conn, err := b.connect()
+	if err != nil {
+		b.advanceBackoff()
+		logStderr("backend %q (re)connect failed (backoff %s): %v", b.cfg.ID, b.backoff, err)
+		return nil, &backendUnavailableError{id: b.cfg.ID, cause: err}
+	}
+	b.resetBackoff()
+	b.conn = conn
+	return conn, nil
+}
+
+// advanceBackoff grows the reconnect backoff (exponential, capped) and arms the
+// next-retry gate. Called under b.mu after a failed connect.
+func (b *stdioBackend) advanceBackoff() {
+	switch {
+	case b.backoff == 0:
+		b.backoff = reconnectBackoffBase
+	default:
+		b.backoff *= 2
+		if b.backoff > reconnectBackoffMax {
+			b.backoff = reconnectBackoffMax
+		}
+	}
+	b.nextRetry = b.now().Add(b.backoff)
+}
+
+// resetBackoff clears the backoff after a successful connect. Called under b.mu.
+func (b *stdioBackend) resetBackoff() {
+	b.backoff = 0
+	b.nextRetry = time.Time{}
+}
+
+// invalidate force-drops a specific dead connection so the next ensureConn
+// respawns, even if alive() has not flipped yet (e.g. a write failed before the
+// reader goroutine observed EOF). No-op if conn has already been replaced.
+func (b *stdioBackend) invalidate(dead *stdioConn) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.conn == dead {
+		b.conn.shutdown()
+		b.conn = nil
+	}
+}
+
+// callWithReconnect issues one JSON-RPC call, transparently reconnecting and
+// retrying ONCE if the connection had dropped (a backend restart). It does NOT
+// retry on caller ctx cancellation/timeout (not a backend death) nor more than
+// once (the backoff gate bounds repeated failures). Governance is unaffected:
+// callWithReconnect runs only AFTER the proxy's decide verdict, so a reconnect
+// can never forward an ungoverned call.
+func (b *stdioBackend) callWithReconnect(ctx context.Context, method string, params interface{}) (*JSONRPCResponse, error) {
+	conn, err := b.ensureConn()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := conn.call(ctx, method, params)
+	if err == nil {
+		return resp, nil
+	}
+	// Caller cancelled/timed out — not a backend death; surface it as-is.
+	if ctx.Err() != nil {
+		return nil, err
+	}
+	// The connection dropped (EOF / closed / broken pipe). Re-establish it and
+	// retry once so a backend restart is transparent to Claude.
+	logStderr("backend %q call %s failed (%v) — reconnecting and retrying once", b.cfg.ID, method, err)
+	b.invalidate(conn)
+	conn, err = b.ensureConn()
+	if err != nil {
+		return nil, err
+	}
+	return conn.call(ctx, method, params)
+}
+
+func (b *stdioBackend) Initialize(context.Context) error {
+	// Establish (and handshake) the first connection eagerly so Aggregate can
+	// list tools. The handshake uses connect's own bounded context.
+	_, err := b.ensureConn()
+	return err
+}
+
 func (b *stdioBackend) ListTools(ctx context.Context) ([]json.RawMessage, error) {
-	resp, err := b.call(ctx, "tools/list", map[string]interface{}{})
+	resp, err := b.callWithReconnect(ctx, "tools/list", map[string]interface{}{})
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +488,7 @@ func (b *stdioBackend) ListTools(ctx context.Context) ([]json.RawMessage, error)
 }
 
 func (b *stdioBackend) CallTool(ctx context.Context, name string, args map[string]interface{}, _ string) (json.RawMessage, error) {
-	resp, err := b.call(ctx, "tools/call", ToolCallParams{Name: name, Arguments: args})
+	resp, err := b.callWithReconnect(ctx, "tools/call", ToolCallParams{Name: name, Arguments: args})
 	if err != nil {
 		return nil, err
 	}
@@ -299,12 +499,11 @@ func (b *stdioBackend) CallTool(ctx context.Context, name string, args map[strin
 }
 
 func (b *stdioBackend) Close() error {
-	if b.stdin != nil {
-		_ = b.stdin.Close()
-	}
-	if b.cmd != nil && b.cmd.Process != nil {
-		_ = b.cmd.Process.Kill()
-		_ = b.cmd.Wait()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.conn != nil {
+		b.conn.shutdown()
+		b.conn = nil
 	}
 	return nil
 }
