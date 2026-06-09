@@ -74,6 +74,37 @@ environment variables (see `manifest.json`):
 | Backend servers file | `AXONFLOW_BACKENDS_FILE` | JSON map — see `config.example.json` |
 | Audit log path | `AXONFLOW_AUDIT_LOG` | optional JSONL sink |
 
+### PII posture: redact (chat default) vs. block
+
+Whether a critical-PII tool call is **allowed through** (and its response
+masked) or **hard-blocked at the gate** is decided by the connected AxonFlow
+deployment (the PDP/engine), **not** by a proxy env var. The engine reads
+`PII_ACTION` at boot:
+
+| `PII_ACTION` | Verdict on critical PII (NIK, NPWP, SSN, …) in a request | When to use |
+|---|---|---|
+| `redact` **(chat default)** | the decide verdict is **allow** — the call is **forwarded**, not denied; the response is then masked on the way back (see below) | conversational / Claude Desktop use, where a hard block on every PII-bearing message is too blunt and the goal is to keep PII out of the model's context while the assistant stays useful |
+| `block` | the decide verdict is **deny** (`-32001`); the backend is never called and nothing is forwarded | regulated evaluations or batch pipelines that must hard-stop on any critical-PII match rather than proceed |
+
+For self-hosted deployments this is set in the install bundle's `.env`
+(`PII_ACTION=redact`) — see [`axonflow-install`](https://github.com/getaxonflow/axonflow-install).
+
+Note the division of labour: `PII_ACTION` governs only the **request-plane
+verdict** (allow vs. deny at the gate). **Response-plane** redaction is separate
+and **always on** regardless of `PII_ACTION` — the proxy routes every allowed
+backend response through the engine's `check-output` (see
+`AXONFLOW_REDACT_RESPONSES` above) and forwards the engine's masked text, so PII
+in a response is masked out of Claude's context in both postures. Under `redact`
+the proxy forwards the request arguments to the backend **unchanged** (it does
+not mask outbound arguments); the chat-safety win is that the call is not
+hard-blocked and the returned data is redacted before it reaches the model.
+
+> **Known limitation / roadmap:** `PII_ACTION` is deployment-global — there is
+> no per-tenant or per-team override today, so a team that needs `redact` while
+> another needs `block` currently requires separate deployments. Per-tenant
+> policy posture is tracked on the Decision Mode policy-hierarchy roadmap
+> (axonflow-enterprise #2426, WS5).
+
 ### Backend map
 
 Each backend is fronted over **stdio** (the proxy launches it: `command` +
