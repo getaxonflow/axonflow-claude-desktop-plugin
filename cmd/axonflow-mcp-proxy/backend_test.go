@@ -19,6 +19,12 @@ import (
 // is set, so the stdioBackend transport is exercised against a REAL child
 // process (exec + pipes + reader goroutine) rather than a mock.
 func TestMain(m *testing.M) {
+	// PROXY_TEST_STDIO_DIE makes the re-exec'd binary exit immediately, before any
+	// handshake — emulating a backend whose process is permanently down (every
+	// (re)spawn dies), so the bounded-backoff / stays-down path can be tested.
+	if os.Getenv("PROXY_TEST_STDIO_DIE") == "1" {
+		os.Exit(0)
+	}
 	if os.Getenv("PROXY_TEST_STDIO_STUB") == "1" {
 		runStdioStub()
 		os.Exit(0)
@@ -53,6 +59,11 @@ func runStdioStub() {
 			if p.Name == "boom" {
 				writeStub(req.ID, nil, &JSONRPCError{Code: -32070, Message: "kaboom"})
 				continue
+			}
+			if p.Name == "slow" {
+				// Sleep before responding so a test can kill the process while the
+				// request is in flight, exercising the in-flight reconnect+retry path.
+				time.Sleep(250 * time.Millisecond)
 			}
 			args, _ := json.Marshal(p.Arguments)
 			writeStub(req.ID, json.RawMessage(`{"content":[{"type":"text","text":`+mustJSONString(string(args))+`}]}`), nil)
