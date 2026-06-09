@@ -464,8 +464,9 @@ func (b *stdioBackend) callWithReconnect(ctx context.Context, method string, par
 	// process died before its response was returned, this retry re-runs it — a
 	// double side-effect for a write/mutating tool. That is inherent to a
 	// transparent MCP reconnect (the protocol carries no idempotency key); it is
-	// acceptable for the read/lookup tools fronted today. An idempotency-key
-	// contract for write tools is tracked as a follow-up.
+	// acceptable for the read/lookup tools fronted today. An at-most-once gate
+	// for write tools (retry only when the request provably never dispatched) is
+	// tracked as a follow-up (issue #17).
 	logStderr("backend %q call %s failed (%v) — reconnecting and retrying once", b.cfg.ID, method, err)
 	b.invalidate(conn)
 	conn, err = b.ensureConn()
