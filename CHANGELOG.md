@@ -6,6 +6,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-09
+
 ### Changed
 - **Response PII redaction now runs through AxonFlow's authoritative engine
   (`POST /api/v1/mcp/check-output`) instead of a local regex.** The proxy
