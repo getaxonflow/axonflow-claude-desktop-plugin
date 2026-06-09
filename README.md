@@ -69,7 +69,7 @@ environment variables (see `manifest.json`):
 | User token (JWT) | `AXONFLOW_USER_TOKEN` | optional; enterprise validated-user audit |
 | Tenant / Org | `AXONFLOW_TENANT_ID` / `AXONFLOW_ORG_ID` | |
 | Fail mode | `AXONFLOW_FAIL_MODE` | `closed` (default) or `open` — request plane only; response redaction is always fail-closed |
-| Response redaction | `AXONFLOW_REDACT_RESPONSES` | `always` (default) · `on-obligation` (legacy: only on a `redact_pii` obligation / fail-open forward) · `off` (explicit opt-out footgun) |
+| Response redaction | `AXONFLOW_REDACT_RESPONSES` | `always` (default) · `on-obligation` (legacy: only on a `redact_pii` obligation / fail-open forward) · `off` (explicit opt-out footgun — disables the whole response-governance call, i.e. PII redaction **and** response-side SQLi/exfil hard-blocks) |
 | Leader email | `AXONFLOW_LEADER_EMAIL` | stamped on audit rows |
 | Backend servers file | `AXONFLOW_BACKENDS_FILE` | JSON map — see `config.example.json` |
 | Audit log path | `AXONFLOW_AUDIT_LOG` | optional JSONL sink |
