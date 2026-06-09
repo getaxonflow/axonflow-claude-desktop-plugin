@@ -370,9 +370,12 @@ func (b *stdioBackend) connect() (*stdioConn, error) {
 
 // ensureConn returns a live, initialized connection, (re)spawning the backend if
 // the current connection is missing or dead. Concurrent callers serialize on mu
-// so a dead backend triggers exactly one respawn. A (re)connect attempt arriving
-// inside the backoff window returns a clean backendUnavailableError immediately
-// instead of spawning; a successful connect resets the backoff.
+// so a dead backend triggers exactly one respawn — a call arriving during a
+// respawn therefore waits for the handshake (bounded by handshakeTimeout) before
+// proceeding; this serialization is deliberate and acceptable. A (re)connect
+// attempt arriving inside the backoff window returns a clean
+// backendUnavailableError immediately instead of spawning; a successful connect
+// resets the backoff.
 func (b *stdioBackend) ensureConn() (*stdioConn, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -456,6 +459,13 @@ func (b *stdioBackend) callWithReconnect(ctx context.Context, method string, par
 	}
 	// The connection dropped (EOF / closed / broken pipe). Re-establish it and
 	// retry once so a backend restart is transparent to Claude.
+	//
+	// AT-LEAST-ONCE: if the call had already executed on the backend but the
+	// process died before its response was returned, this retry re-runs it — a
+	// double side-effect for a write/mutating tool. That is inherent to a
+	// transparent MCP reconnect (the protocol carries no idempotency key); it is
+	// acceptable for the read/lookup tools fronted today. An idempotency-key
+	// contract for write tools is tracked as a follow-up.
 	logStderr("backend %q call %s failed (%v) — reconnecting and retrying once", b.cfg.ID, method, err)
 	b.invalidate(conn)
 	conn, err = b.ensureConn()
