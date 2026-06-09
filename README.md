@@ -156,12 +156,18 @@ rebuild.
 - HTTP backends speak MCP Streamable HTTP: the proxy accepts both
   `application/json` and `text/event-stream` responses (sending an `Accept`
   header that covers both, so spec-compliant servers don't reject with 406).
-- If a backend MCP server dies **mid-session**, calls routed to it fail with a
-  "backend connection closed" error (the other backends keep working), and its
-  tools may still appear in the (cached) tool list until the proxy restarts. The
-  proxy does **not** auto-respawn a dead backend within a session — restart the
-  backend, or Claude Desktop, to restore it. (Backends down at *startup* are
-  skipped cleanly and never exposed.)
+- If a backend MCP server is restarted **mid-session** (redeploy, crash), the
+  proxy transparently re-establishes the dropped stdio session — re-spawning and
+  re-handshaking it on the next call — so a backend redeploy no longer forces a
+  Claude Desktop restart. A genuinely-down backend is retried with bounded
+  exponential backoff and surfaces a clean, retryable error meanwhile. Reconnect
+  runs only **after** the policy verdict, so it never forwards an ungoverned call.
+  **Caveat (at-least-once):** if a `tools/call` executed on the backend but the
+  process died before its response returned, the transparent retry re-runs it — a
+  tool with side effects (writes/mutations) can therefore execute twice. The
+  reconnect is intended for the read/lookup tools this proxy fronts today; an
+  at-most-once gate for write tools is tracked in #17. (Backends down at
+  *startup* are skipped cleanly and never exposed.)
 
 ## Build & test
 
