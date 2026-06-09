@@ -29,7 +29,7 @@ import (
 
 // proxyVersion is the proxy build version, surfaced in serverInfo + the .mcpb
 // manifest. Keep in lockstep with manifest.json + CHANGELOG.md.
-const proxyVersion = "0.1.4"
+const proxyVersion = "0.2.0"
 
 // proxyProtocolVersion is the MCP protocol version the proxy advertises to
 // Claude Desktop. It echoes the client's requested version when the client
