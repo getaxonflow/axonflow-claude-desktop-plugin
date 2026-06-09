@@ -74,6 +74,51 @@ environment variables (see `manifest.json`):
 | Backend servers file | `AXONFLOW_BACKENDS_FILE` | JSON map — see `config.example.json` |
 | Audit log path | `AXONFLOW_AUDIT_LOG` | optional JSONL sink |
 
+### PII posture: redact (chat default) vs. block
+
+What the engine **does** when it finds critical PII (NIK, NPWP, SSN, …) — mask
+it, block it, or forward it untouched — is decided by the connected AxonFlow
+deployment's `PII_ACTION`, **not** by a proxy env var. `PII_ACTION` is read at
+boot and applies on **both planes**: the request (the `/api/v1/decide` verdict)
+*and* the response (the `check-output` redaction the proxy runs on every allowed
+backend response).
+
+| `PII_ACTION` | Request plane (`decide` verdict) | Response plane (`check-output`) | Net for chat |
+|---|---|---|---|
+| `redact` **(chat default)** | **allow** — the call is forwarded, not denied | critical PII is **masked** (e.g. NIK → `[REDACTED]`) and the masked response is forwarded | call proceeds; PII is stripped out of Claude's context |
+| `block` | **deny** (`-32001`) — backend never called | a critical-PII **response is blocked** (`-32001`) — the engine returns 403, the proxy drops it; nothing reaches Claude | every critical-PII match hard-stops |
+| `warn` / `log` | allow | response is **forwarded unredacted** (detect-don't-modify) | PII reaches Claude — detection signal only |
+
+**This change exists because of the response plane.** The block a partner saw —
+`[MCP] Response blocked by Indonesia PII detection` — fired on `check-output`
+under `PII_ACTION=block`: a backend tool returned a NIK, and the engine blocked
+the whole response instead of masking it. Flipping the deployment to
+`PII_ACTION=redact` is exactly what turns that response-plane **block → mask**,
+which is the right behaviour for a chat assistant. For self-hosted deployments
+set this in the install bundle's `.env` (`PII_ACTION=redact`) — see
+[`axonflow-install`](https://github.com/getaxonflow/axonflow-install).
+
+Two **separate** knobs — don't conflate them:
+
+- **`AXONFLOW_REDACT_RESPONSES`** (proxy, table above): controls *whether* the
+  proxy **sends** each allowed response to `check-output` at all (`always`
+  default · `on-obligation` · `off`). It does **not** decide block-vs-mask.
+- **`PII_ACTION`** (engine): controls *what* `check-output` then **does** with
+  critical PII — `block` → response blocked, `redact` → response masked,
+  `warn`/`log` → response forwarded unredacted.
+
+So `AXONFLOW_REDACT_RESPONSES=always` only guarantees the response is *checked*;
+whether a NIK in it is masked or the response is blocked is the engine's
+`PII_ACTION`. On the request plane the proxy forwards the original arguments to
+the backend **unchanged** (it does not mask outbound arguments) — under `redact`
+the request is simply allowed through.
+
+> **Known limitation / roadmap:** `PII_ACTION` is deployment-global — there is
+> no per-tenant or per-team override today, so a team that needs `redact` while
+> another needs `block` currently requires separate deployments. Per-tenant
+> policy posture is tracked on the Decision Mode policy-hierarchy roadmap
+> (axonflow-enterprise #2426, WS5).
+
 ### Backend map
 
 Each backend is fronted over **stdio** (the proxy launches it: `command` +
@@ -111,12 +156,18 @@ rebuild.
 - HTTP backends speak MCP Streamable HTTP: the proxy accepts both
   `application/json` and `text/event-stream` responses (sending an `Accept`
   header that covers both, so spec-compliant servers don't reject with 406).
-- If a backend MCP server dies **mid-session**, calls routed to it fail with a
-  "backend connection closed" error (the other backends keep working), and its
-  tools may still appear in the (cached) tool list until the proxy restarts. The
-  proxy does **not** auto-respawn a dead backend within a session — restart the
-  backend, or Claude Desktop, to restore it. (Backends down at *startup* are
-  skipped cleanly and never exposed.)
+- If a backend MCP server is restarted **mid-session** (redeploy, crash), the
+  proxy transparently re-establishes the dropped stdio session — re-spawning and
+  re-handshaking it on the next call — so a backend redeploy no longer forces a
+  Claude Desktop restart. A genuinely-down backend is retried with bounded
+  exponential backoff and surfaces a clean, retryable error meanwhile. Reconnect
+  runs only **after** the policy verdict, so it never forwards an ungoverned call.
+  **Caveat (at-least-once):** if a `tools/call` executed on the backend but the
+  process died before its response returned, the transparent retry re-runs it — a
+  tool with side effects (writes/mutations) can therefore execute twice. The
+  reconnect is intended for the read/lookup tools this proxy fronts today; an
+  at-most-once gate for write tools is tracked in #17. (Backends down at
+  *startup* are skipped cleanly and never exposed.)
 
 ## Build & test
 
