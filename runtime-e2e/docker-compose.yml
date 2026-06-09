@@ -1,15 +1,32 @@
 # Runtime-e2e stack for the AxonFlow Claude Desktop governance proxy.
 #
-# Boots a LIVE AxonFlow agent (community edition) with its Decision API so the
-# proxy is exercised against a real PDP — no mocked verdicts (the whole point of
-# runtime-e2e). Policy posture is pinned deterministically:
+# Boots a LIVE AxonFlow agent (ENTERPRISE edition) with its Decision API + the
+# response-governance endpoint (POST /api/v1/mcp/check-output) so the proxy is
+# exercised against a real PDP and the AUTHORITATIVE redaction engine — no mocked
+# verdicts, no mocked redaction (the whole point of runtime-e2e). Enterprise
+# edition + a real Ed25519 license is required because the full PII coverage the
+# test asserts (NIK + SSN + email + phone, #2565) lives in the enterprise
+# detectors; a community agent would not redact SSN/NIK via check-output.
+#
+# Policy posture is pinned deterministically:
 #   - SQLI_ACTION=block  → a SQL-injection tool arg yields verdict=deny
-#   - PII_ACTION=redact  → a critical-PII tool arg yields allow + redact_pii
+#   - PII_ACTION=redact  → a critical-PII response is masked (not hard-denied)
 #
 # The proxy + stub backend run on the host (driven by run.sh over stdio); only
 # postgres + the agent run here.
 #
-# Usage:  docker compose up -d   →   ../run.sh   →   docker compose down -v
+# REQUIRED env (the harness refuses demo creds — see run.sh):
+#   AXONFLOW_AGENT_IMAGE   an ENTERPRISE-edition agent image (EDITION=enterprise).
+#                          Build one from the enterprise repo:
+#                            docker build --build-arg EDITION=enterprise \
+#                              -f platform/agent/Dockerfile -t axonflow-agent:enterprise-local .
+#   AXONFLOW_LICENSE_KEY   a real Ed25519 Enterprise license (keygen / setup-e2e-testing.sh).
+#   AXONFLOW_ORG_ID        the license's org id (Basic-auth username).
+#
+# Usage:
+#   AXONFLOW_AGENT_IMAGE=axonflow-agent:enterprise-local \
+#   AXONFLOW_LICENSE_KEY="AXON-…" AXONFLOW_ORG_ID="desktop-e2e" \
+#     docker compose up -d   →   ./run.sh   →   docker compose down -v
 services:
   postgres:
     image: postgres:15-alpine
@@ -24,17 +41,19 @@ services:
       retries: 15
 
   axonflow-agent:
-    # Prebuilt community agent image (Decision Mode + static policy engine).
-    # Override with AXONFLOW_AGENT_IMAGE to test against a freshly built tag.
-    image: ${AXONFLOW_AGENT_IMAGE:-686831565523.dkr.ecr.us-east-1.amazonaws.com/axonflow-agent:5747857}
+    # ENTERPRISE-edition agent image — REQUIRED (no default). See header.
+    image: ${AXONFLOW_AGENT_IMAGE:?set AXONFLOW_AGENT_IMAGE to an enterprise-edition agent image}
     environment:
       DATABASE_URL: postgres://axonflow:localdev123@postgres:5432/axonflow?sslmode=disable
-      AXONFLOW_EDITION: community
-      DEPLOYMENT_MODE: community
+      AXONFLOW_EDITION: enterprise
+      DEPLOYMENT_MODE: in-vpc-enterprise
       AXONFLOW_DB_USE_APP_ROLE: "false"
       AXONFLOW_PROFILE: strict
       SQLI_ACTION: block
       PII_ACTION: redact
+      # Real Ed25519 Enterprise license + its org id (Basic-auth identity).
+      AXONFLOW_LICENSE_KEY: ${AXONFLOW_LICENSE_KEY:?set AXONFLOW_LICENSE_KEY to a real Enterprise license}
+      ORG_ID: ${AXONFLOW_ORG_ID:?set AXONFLOW_ORG_ID to the license org id}
       PORT: "8080"
       LOG_LEVEL: info
     ports:
@@ -43,7 +62,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 30

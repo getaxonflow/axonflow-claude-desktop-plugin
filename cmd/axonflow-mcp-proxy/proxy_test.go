@@ -55,27 +55,77 @@ func toolDescriptor(name string) json.RawMessage {
 	return json.RawMessage(`{"name":"` + name + `","description":"d","inputSchema":{"type":"object"}}`)
 }
 
-// decideStub stands up an httptest server emulating POST /api/v1/decide.
+// decideStub stands up an httptest server emulating BOTH the request-side
+// POST /api/v1/decide and the response-side POST /api/v1/mcp/check-output, since
+// the proxy reaches both at the same Endpoint. The decide* fields drive the
+// verdict; the co* fields drive response governance (redaction / block).
 type decideStub struct {
 	server  *httptest.Server
 	status  int
 	resp    DecideResponse
 	calls   atomic.Int64
 	lastReq DecideRequest
+
+	// check-output behaviour. Default: 200 allow with no redaction (pass-through).
+	coStatus  int
+	coResp    checkOutputResponse
+	coCalls   atomic.Int64
+	coLastReq checkOutputRequest
+	// coRedact, when set, computes the check-output (status, response) from the
+	// submitted message, so a test can emulate the engine masking PII in place.
+	coRedact func(message string) (int, checkOutputResponse)
 }
 
 func newDecideStub() *decideStub {
-	d := &decideStub{status: http.StatusOK}
-	d.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	d := &decideStub{status: http.StatusOK, coStatus: http.StatusOK,
+		coResp: checkOutputResponse{Allowed: true}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/decide", func(w http.ResponseWriter, r *http.Request) {
 		d.calls.Add(1)
 		_ = json.NewDecoder(r.Body).Decode(&d.lastReq)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(d.status)
 		_ = json.NewEncoder(w).Encode(d.resp)
-	}))
+	})
+	mux.HandleFunc("/api/v1/mcp/check-output", func(w http.ResponseWriter, r *http.Request) {
+		d.coCalls.Add(1)
+		_ = json.NewDecoder(r.Body).Decode(&d.coLastReq)
+		status, resp := d.coStatus, d.coResp
+		if d.coRedact != nil {
+			status, resp = d.coRedact(d.coLastReq.Message)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+	d.server = httptest.NewServer(mux)
 	return d
 }
 func (d *decideStub) close() { d.server.Close() }
+
+// coMaskPII emulates the engine's check-output redaction for the enforcement
+// tests: it masks the known PII literals the tests embed and returns the masked
+// message as redacted_data (a string, exactly like RedactedMessage). When
+// nothing matched it returns allow with NO redacted_data, so WasRedacted is
+// false and the proxy forwards the original — matching the real engine.
+func coMaskPII(message string) (int, checkOutputResponse) {
+	repl := []struct{ from, to string }{
+		{"3174012509900001", "[REDACTED:nik]"},
+		{"budi.santoso@example.co.id", "[REDACTED:email]"},
+		{"budi@example.co.id", "[REDACTED:email]"},
+		{"strip@example.com", "[REDACTED:email]"},
+		{"+6281234567890", "[REDACTED:phone]"},
+		{"123-45-6789", "[REDACTED:ssn]"},
+	}
+	masked := message
+	for _, r := range repl {
+		masked = strings.ReplaceAll(masked, r.from, r.to)
+	}
+	if masked == message {
+		return http.StatusOK, checkOutputResponse{Allowed: true}
+	}
+	return http.StatusOK, checkOutputResponse{Allowed: true, RedactedData: masked, PoliciesEvaluated: 1, DecisionID: "co-dec"}
+}
 
 // newTestProxy builds a Proxy pointed at the decide stub with the given
 // backends already aggregated, so enforce() tests skip the network handshake.
@@ -95,11 +145,12 @@ func newTestProxy(t *testing.T, endpoint string, backends ...*fakeBackend) *Prox
 		RedactResponses: redactAlways,
 	}
 	p := &Proxy{
-		cfg:      cfg,
-		decide:   NewDecideClient(cfg),
-		audit:    newSilentAudit(),
-		backends: map[string]Backend{},
-		routes:   map[string]route{},
+		cfg:         cfg,
+		decide:      NewDecideClient(cfg),
+		checkOutput: NewCheckOutputClient(cfg),
+		audit:       newSilentAudit(),
+		backends:    map[string]Backend{},
+		routes:      map[string]route{},
 	}
 	for _, b := range backends {
 		cfg.Backends = append(cfg.Backends, BackendConfig{ID: b.id})
@@ -206,6 +257,7 @@ func TestEnforce_NeedsApproval_Code32002(t *testing.T) {
 func TestEnforce_RedactObligation_StripsPII(t *testing.T) {
 	d := newDecideStub()
 	defer d.close()
+	d.coRedact = coMaskPII // engine masks PII in the submitted response
 	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-4", TraceID: strings.Repeat("d", 32),
 		Obligations: []DecisionObligation{{Type: "redact_pii", Detail: "indonesia pii"}}}
 
@@ -218,6 +270,13 @@ func TestEnforce_RedactObligation_StripsPII(t *testing.T) {
 	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`4`), ToolCallParams{Name: "lookup"})
 	if resp.Error != nil {
 		t.Fatalf("expected allow, got %+v", resp.Error)
+	}
+	if d.coCalls.Load() != 1 {
+		t.Fatalf("expected exactly one check-output call, got %d", d.coCalls.Load())
+	}
+	// The proxy submits the whole serialized result as the engine `message`.
+	if !strings.Contains(d.coLastReq.Message, "3174012509900001") || d.coLastReq.ConnectorType != checkOutputConnectorType {
+		t.Fatalf("check-output request not as expected: %+v", d.coLastReq)
 	}
 	body := string(resp.Result)
 	if strings.Contains(body, "3174012509900001") || strings.Contains(body, "budi@example.co.id") {
@@ -240,6 +299,7 @@ func TestEnforce_CleanRequest_ResponseOnlyPII_DefaultRedacts(t *testing.T) {
 	defer d.close()
 	// allow, NO obligations — exactly what the live PDP returns for a clean
 	// customer_id lookup.
+	d.coRedact = coMaskPII
 	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-5", TraceID: strings.Repeat("e", 32),
 		Obligations: []DecisionObligation{}}
 	// Response carries NIK + email + a NIK-keyed map (the §4.3 key case) even
@@ -279,6 +339,9 @@ func TestEnforce_OnObligationMode_NoObligation_PassesThrough(t *testing.T) {
 	if !strings.Contains(string(resp.Result), "keep@example.com") {
 		t.Fatalf("on-obligation mode without obligation must pass through: %s", string(resp.Result))
 	}
+	if d.coCalls.Load() != 0 {
+		t.Fatalf("on-obligation/no-obligation must NOT call check-output, got %d", d.coCalls.Load())
+	}
 }
 
 // TestEnforce_OnObligationMode_WithObligation_Redacts confirms the legacy mode
@@ -286,6 +349,7 @@ func TestEnforce_OnObligationMode_NoObligation_PassesThrough(t *testing.T) {
 func TestEnforce_OnObligationMode_WithObligation_Redacts(t *testing.T) {
 	d := newDecideStub()
 	defer d.close()
+	d.coRedact = coMaskPII
 	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-5c", TraceID: strings.Repeat("e", 32),
 		Obligations: []DecisionObligation{{Type: "redact_pii"}}}
 	piiResult := `{"content":[{"type":"text","text":"email strip@example.com"}]}`
@@ -319,6 +383,9 @@ func TestEnforce_OffMode_NeverRedacts(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("off mode should still forward: %+v", resp.Error)
 	}
+	if d.coCalls.Load() != 0 {
+		t.Fatalf("off mode must NOT call check-output, got %d", d.coCalls.Load())
+	}
 }
 
 // TestEnforce_DefaultAlways_NonPII_NotOverRedacted is the defensive guard: a
@@ -343,6 +410,83 @@ func TestEnforce_DefaultAlways_NonPII_NotOverRedacted(t *testing.T) {
 		if !strings.Contains(string(resp.Result), want) {
 			t.Fatalf("benign field %q lost: %s", want, string(resp.Result))
 		}
+	}
+}
+
+// TestEnforce_RedactionUnreachable_FailsClosed is the load-bearing safety test
+// and the precondition-absent case: the request is CLEAN (allow, no obligation)
+// so nothing on the request side flags PII, but the RESPONSE carries PII and the
+// engine's check-output endpoint is unavailable. Moving redaction to a network
+// call means "engine unreachable" must mean "do NOT forward" — never forward the
+// un-redacted response. The old local redactor would have "redacted" with the
+// PDP down; this proves the new behaviour fails CLOSED instead.
+func TestEnforce_RedactionUnreachable_FailsClosed(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-ru", TraceID: strings.Repeat("a", 32)}
+	d.coStatus = http.StatusInternalServerError // engine errors → unreachable-equivalent
+	piiResult := `{"content":[{"type":"text","text":"nik 3174012509900001 ssn 123-45-6789"}]}`
+	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")}, callResult: json.RawMessage(piiResult)}
+	p := newTestProxy(t, d.server.URL, be)
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`1`), ToolCallParams{Name: "lookup"})
+	e := mustParseError(t, resp)
+	if e.Code != codePolicyUnavailable {
+		t.Fatalf("redaction-unreachable code = %d, want %d", e.Code, codePolicyUnavailable)
+	}
+	// The (already-executed) PII response must NOT have been forwarded.
+	if resp.Result != nil {
+		t.Fatalf("fail-closed must not forward a result, got %s", string(resp.Result))
+	}
+	if strings.Contains(string(resp.Result)+e.Message, "3174012509900001") || strings.Contains(string(resp.Result)+e.Message, "123-45-6789") {
+		t.Fatalf("PII leaked despite engine unreachable: %s / %s", string(resp.Result), e.Message)
+	}
+}
+
+// TestEnforce_OutputPolicyBlock_Denies covers the engine returning a hard BLOCK
+// on the response (critical-PII hard-deny / response SQLi / exfiltration, HTTP
+// 403). The proxy must surface a deny and never forward the response.
+func TestEnforce_OutputPolicyBlock_Denies(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-ob", TraceID: strings.Repeat("b", 32)}
+	d.coStatus = http.StatusForbidden
+	d.coResp = checkOutputResponse{Allowed: false, BlockReason: "critical PII (NIK) in response", DecisionID: "co-block"}
+	piiResult := `{"content":[{"type":"text","text":"nik 3174012509900001"}]}`
+	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")}, callResult: json.RawMessage(piiResult)}
+	p := newTestProxy(t, d.server.URL, be)
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`1`), ToolCallParams{Name: "lookup"})
+	e := mustParseError(t, resp)
+	if e.Code != codePolicyDeny {
+		t.Fatalf("output block code = %d, want %d", e.Code, codePolicyDeny)
+	}
+	if !strings.Contains(e.Message, "critical PII") {
+		t.Fatalf("output block lost engine reason: %q", e.Message)
+	}
+	if strings.Contains(string(resp.Result), "3174012509900001") {
+		t.Fatalf("blocked response must not be forwarded: %s", string(resp.Result))
+	}
+}
+
+// TestEnforce_RedactionInvalidJSON_FailsClosed: if the engine returns redacted
+// text that no longer parses as JSON, the proxy must NOT forward it (corrupt
+// result) and must NOT fall back to the original (PII leak) — it fails closed.
+func TestEnforce_RedactionInvalidJSON_FailsClosed(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-bad", TraceID: strings.Repeat("c", 32)}
+	d.coRedact = func(string) (int, checkOutputResponse) {
+		return http.StatusOK, checkOutputResponse{Allowed: true, RedactedData: `{not valid json`}
+	}
+	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")},
+		callResult: json.RawMessage(`{"content":[{"type":"text","text":"x"}]}`)}
+	p := newTestProxy(t, d.server.URL, be)
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`1`), ToolCallParams{Name: "lookup"})
+	e := mustParseError(t, resp)
+	if e.Code != codePolicyUnavailable {
+		t.Fatalf("invalid-redaction code = %d, want %d", e.Code, codePolicyUnavailable)
 	}
 }
 

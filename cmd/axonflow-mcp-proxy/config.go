@@ -33,15 +33,18 @@ type Config struct {
 	// fintech's tool surface (BukuWarung). Opt in only with eyes open.
 	FailOpen bool // AXONFLOW_FAIL_MODE=open
 
-	// RedactResponses controls when the local response redactor runs over a
-	// forwarded tool response. The DEFAULT is "always" (default-on): every tool
-	// response is scanned before it reaches Claude's context, regardless of
-	// whether the PDP attached a redact_pii obligation — because the agent never
-	// sees the response, so stripping PII out of it is unconditionally the
-	// proxy's job (the §4.3 control). "on-obligation" restores the legacy
-	// obligation-gated behaviour (scan only on a redact_pii obligation or a
-	// fail-open forward); "off" disables response redaction entirely (an explicit
-	// opt-out footgun — PII in responses then flows to the context window).
+	// RedactResponses controls when the response-governance engine (check-output)
+	// runs over a forwarded tool response. The DEFAULT is "always" (default-on):
+	// every tool response is sent to the engine before it reaches Claude's
+	// context, regardless of whether the PDP attached a redact_pii obligation —
+	// because the agent never sees the response, so governing it is
+	// unconditionally the proxy's job (the §4.3 control). "on-obligation" restores
+	// the legacy obligation-gated behaviour (scan only on a redact_pii obligation
+	// or a fail-open forward); "off" disables the response-governance call
+	// ENTIRELY — an explicit opt-out footgun that turns off not just PII redaction
+	// but also response-side hard-blocks (SQLi / exfiltration) the engine performs,
+	// so PII in responses then flows straight to the context window. (Request-plane
+	// decide governance is unaffected by this setting.)
 	RedactResponses string // AXONFLOW_REDACT_RESPONSES=always|on-obligation|off (default always)
 
 	// Identity stamped onto every Layer-1 audit row + forwarded to the PDP in
@@ -87,7 +90,7 @@ const defaultBackendTimeout = 30 * time.Second
 const (
 	redactAlways       = "always"        // default: scan every response
 	redactOnObligation = "on-obligation" // legacy: scan only on obligation / fail-open
-	redactOff          = "off"           // explicit opt-out (footgun)
+	redactOff          = "off"           // explicit opt-out (footgun: disables ALL response-plane governance)
 )
 
 // slugRE bounds backend IDs to MCP-tool-name-safe characters so the namespaced
@@ -160,6 +163,11 @@ func LoadConfig() (Config, error) {
 	// than silently defaulting (a typo'd "alway" must not quietly disable a
 	// compliance control).
 	cfg.RedactResponses = strings.ToLower(envOr("AXONFLOW_REDACT_RESPONSES", redactAlways))
+	// Accept the underscore spelling as an alias for the canonical hyphenated
+	// value so "on_obligation" and "on-obligation" both resolve identically.
+	if cfg.RedactResponses == "on_obligation" {
+		cfg.RedactResponses = redactOnObligation
+	}
 	switch cfg.RedactResponses {
 	case redactAlways, redactOnObligation, redactOff:
 	default:

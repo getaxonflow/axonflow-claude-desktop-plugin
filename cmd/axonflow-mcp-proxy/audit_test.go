@@ -78,10 +78,3 @@ func TestAuditLogger_AppendsToFile(t *testing.T) {
 		t.Fatalf("expected 2 audit lines, got %d", lines)
 	}
 }
-
-func TestRedactionByTypeSorted(t *testing.T) {
-	got := redactionByTypeSorted(map[string]int{"email": 2, "nik": 1})
-	if strings.Join(got, ",") != "email:2,nik:1" {
-		t.Fatalf("sorted = %v", got)
-	}
-}

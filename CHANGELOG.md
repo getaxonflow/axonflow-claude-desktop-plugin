@@ -6,6 +6,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Response PII redaction now runs through AxonFlow's authoritative engine
+  (`POST /api/v1/mcp/check-output`) instead of a local regex.** The proxy
+  submits each allowed backend response to the engine (HTTP Basic auth, the same
+  credentials as the decide call) and forwards the engine's redacted text, so
+  redaction coverage now tracks the platform's detectors (NIK + SSN + email +
+  phone …, #2565) and improves with the platform — with no proxy change. The
+  divergent hand-rolled redactor (`redact.go`, a regex subset that missed
+  whole categories such as US SSN) is **deleted**. (#2563)
+
+### Security
+- **The response plane is now unconditionally fail-CLOSED.** Because redaction is
+  a network call, an unreachable/erroring engine means the (already-executed)
+  response is **not forwarded** — a network hiccup can never leak un-redacted PII
+  into Claude's context. This holds even under request-plane fail-open
+  (`AXONFLOW_FAIL_MODE=open`). The deleted local redactor used to "redact" even
+  with the PDP down, which masked this failure mode. An engine hard-block on a
+  response (critical-PII deny / response SQLi / exfiltration) surfaces as a deny
+  (`-32001`); engine-unavailable surfaces as `-32003`.
+
 ## [0.1.3] - 2026-06-09
 
 ### Fixed

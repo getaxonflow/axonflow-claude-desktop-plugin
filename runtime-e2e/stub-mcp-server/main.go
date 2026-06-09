@@ -10,7 +10,7 @@
 // It speaks newline-delimited JSON-RPC 2.0 over stdin/stdout (MCP stdio
 // transport) and implements initialize, tools/list, and tools/call for:
 //
-//   - lookup_customer  → returns a record containing NIK / email / phone (PII)
+//   - lookup_customer  → returns a record containing NIK / email / phone / SSN (PII)
 //   - export_ledger    → returns a JSON array of N rows (record-count check)
 //
 // All diagnostics go to stderr so stdout stays a clean JSON-RPC channel.
@@ -121,13 +121,14 @@ func handleCall(req *rpcRequest) (rpcResponse, bool) {
 	}
 	switch params.Name {
 	case "lookup_customer":
-		// PII-bearing record: NIK (16 digits), email, +62 phone.
+		// PII-bearing record: NIK (16 digits), email, +62 phone, US SSN.
 		record := map[string]interface{}{
 			"customer_id": params.Arguments["customer_id"],
 			"name":        "Budi Santoso",
-			"nik":         "3174012509900001",
-			"email":       "budi.santoso@example.co.id",
-			"phone":       "+6281234567890",
+			"nik":         "3174012509900001",           // Indonesian KTP/NIK
+			"email":       "budi.santoso@example.co.id", // generic email
+			"phone":       "+6281234567890",             // +62 Indonesian mobile
+			"ssn":         "123-45-6789",                // US SSN (#2565 coverage)
 			"status":      "active",
 		}
 		text := mustJSON(record)

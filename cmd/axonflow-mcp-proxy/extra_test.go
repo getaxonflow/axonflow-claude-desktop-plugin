@@ -146,40 +146,30 @@ func TestBackendIDAccessors(t *testing.T) {
 	}
 }
 
-func TestRedactResult_NumericPII(t *testing.T) {
-	// PII returned as a JSON number must still be redacted (R3 HIGH fix);
-	// a non-PII number must survive untouched.
-	in := `{"structuredContent":{"nik":3174012509900001,"balance":5000},"content":[{"type":"text","text":"ok"}]}`
-	out, res := redactResult([]byte(in))
-	s := string(out)
-	if strings.Contains(s, "3174012509900001") {
-		t.Fatalf("numeric NIK not redacted: %s", s)
-	}
-	if !strings.Contains(s, "5000") {
-		t.Fatalf("non-PII number must survive: %s", s)
-	}
-	if res.Count < 1 {
-		t.Fatalf("expected >=1 redaction, got %d", res.Count)
-	}
-}
-
-func TestEnforce_FailOpen_TransportError_ForwardsAndRedacts(t *testing.T) {
-	// PDP unreachable + fail-open → forward, AND still redact (defense-in-depth).
+func TestEnforce_FailOpen_TransportError_StillFailsClosedOnRedaction(t *testing.T) {
+	// The decide FailOpen posture governs the REQUEST plane only. With the whole
+	// endpoint dead, fail-open forwards the call to the backend — but the RESPONSE
+	// plane is unconditionally fail-closed: check-output is also unreachable, so
+	// the PII-bearing response must NOT be forwarded. A network hiccup must never
+	// leak un-redacted PII into the context window, regardless of the decide
+	// posture. (This replaces the old "fail-open forwards AND redacts locally"
+	// test — there is no local redactor to fall back to anymore.)
 	piiResult := `{"content":[{"type":"text","text":"nik 3174012509900001"}]}`
 	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")},
 		callResult: json.RawMessage(piiResult)}
-	p := newTestProxy(t, "http://127.0.0.1:1", be) // dead PDP
+	p := newTestProxy(t, "http://127.0.0.1:1", be) // dead endpoint (decide AND check-output)
 	p.cfg.FailOpen = true
 
 	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`1`), ToolCallParams{Name: "lookup"})
-	if resp.Error != nil {
-		t.Fatalf("fail-open should forward on transport error, got %+v", resp.Error)
+	e := mustParseError(t, resp)
+	if e.Code != codePolicyUnavailable {
+		t.Fatalf("fail-open + redaction-unreachable must fail closed, code = %d want %d", e.Code, codePolicyUnavailable)
 	}
 	if be.callCount.Load() != 1 {
-		t.Fatalf("fail-open should reach backend once, got %d", be.callCount.Load())
+		t.Fatalf("fail-open should still reach the backend once, got %d", be.callCount.Load())
 	}
-	if strings.Contains(string(resp.Result), "3174012509900001") {
-		t.Fatalf("fail-open forward must still redact PII: %s", string(resp.Result))
+	if strings.Contains(string(resp.Result)+e.Message, "3174012509900001") {
+		t.Fatalf("PII must not leak when redaction is unreachable: %s / %s", string(resp.Result), e.Message)
 	}
 }
 

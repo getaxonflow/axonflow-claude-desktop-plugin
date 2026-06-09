@@ -49,8 +49,9 @@ extension.
 | **allow** | forwarded to the backend unchanged |
 | **deny** | blocked with JSON-RPC `-32001`; the deny reason + `decision_id`/`trace_id` surface to the user; the backend is never called |
 | **needs_approval** | held with `-32002` (HITL); not forwarded |
-| **redact_pii obligation** | the backend's response is scanned and PII masked (`[REDACTED:*]`) before it reaches Claude's context — the cross-border-data control |
-| **PDP unreachable** | **fail-closed by default** (`-32003`): the call is blocked. Opt into fail-open only with eyes open. |
+| **response redaction** | every allowed backend response is sent to AxonFlow's authoritative engine (`POST /api/v1/mcp/check-output`) and PII is masked before it reaches Claude's context — the cross-border-data control. Coverage tracks the platform's detectors (NIK + SSN + email + phone …); the proxy never re-implements redaction locally. |
+| **response blocked** | if the engine hard-blocks a response (critical-PII deny, response SQLi, exfiltration), the call is denied (`-32001`) and the response is never forwarded |
+| **PDP / engine unreachable** | **fail-closed by default** (`-32003`): the call is blocked. The response plane is *unconditionally* fail-closed — if the redaction engine is unreachable the (already-executed) response is **not** forwarded, even under fail-open. Opt into request-plane fail-open only with eyes open. |
 
 Every call writes one **Layer-1 audit row** (`session_id`, `leader_email`,
 `tool_name`, `parameters_hash`, `response_record_count`, `duration_ms`, plus
@@ -67,7 +68,8 @@ environment variables (see `manifest.json`):
 | Client ID / secret | `AXONFLOW_CLIENT_ID` / `AXONFLOW_CLIENT_SECRET` | secret is masked + stored securely |
 | User token (JWT) | `AXONFLOW_USER_TOKEN` | optional; enterprise validated-user audit |
 | Tenant / Org | `AXONFLOW_TENANT_ID` / `AXONFLOW_ORG_ID` | |
-| Fail mode | `AXONFLOW_FAIL_MODE` | `closed` (default) or `open` |
+| Fail mode | `AXONFLOW_FAIL_MODE` | `closed` (default) or `open` — request plane only; response redaction is always fail-closed |
+| Response redaction | `AXONFLOW_REDACT_RESPONSES` | `always` (default) · `on-obligation` (legacy: only on a `redact_pii` obligation / fail-open forward) · `off` (explicit opt-out footgun — disables the whole response-governance call, i.e. PII redaction **and** response-side SQLi/exfil hard-blocks) |
 | Leader email | `AXONFLOW_LEADER_EMAIL` | stamped on audit rows |
 | Backend servers file | `AXONFLOW_BACKENDS_FILE` | JSON map — see `config.example.json` |
 | Audit log path | `AXONFLOW_AUDIT_LOG` | optional JSONL sink |
@@ -95,13 +97,17 @@ rebuild.
   the data-exfiltration and tool-action risk lives.
 - Plain **chat** content (no MCP) is **not** interceptable without Anthropic's
   **Enterprise Compliance API**. This proxy does not claim otherwise.
-- The redaction patterns here are a defense-in-depth **mirror** of AxonFlow's
-  platform PII detectors — a regex filter, **not a complete DLP engine**. It
-  masks PII in string and numeric **values** and in object **keys**, at any
-  depth. It does **not** catch PII split across separate JSON array elements
-  (`["3174","0125",…]`), nor base64/hex-encoded PII. The platform (PDP) at the
-  gate remains the authoritative detector; block-at-the-gate (or a backend that
-  never emits the data) is the fix for those gaps, not this last-line filter.
+- Response redaction is performed by AxonFlow's **authoritative engine**
+  (`POST /api/v1/mcp/check-output`), not a local regex — the proxy submits each
+  backend response and forwards the engine's redacted text. Coverage therefore
+  tracks the platform's detectors (NIK + SSN + email + phone …) and improves
+  with the platform, with no proxy change. Because it is a network call, the
+  response plane is **fail-closed**: if the engine is unreachable or errors, the
+  response is **not** forwarded (a network hiccup must never leak un-redacted PII
+  into the context). The platform (PDP) at the gate remains the authoritative
+  detector; block-at-the-gate (or a backend that never emits the data) is the
+  fix for data the engine can't see (e.g. PII split across separate JSON array
+  elements, or base64/hex-encoded), not a last-line proxy filter.
 - HTTP backends speak MCP Streamable HTTP: the proxy accepts both
   `application/json` and `text/event-stream` responses (sending an `Accept`
   header that covers both, so spec-compliant servers don't reject with 406).
