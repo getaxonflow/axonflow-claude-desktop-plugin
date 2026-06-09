@@ -6,6 +6,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-10
+
+### Fixed
+- **A restarted backend MCP server no longer forces a Claude Desktop restart.**
+  When a backend stdio MCP server restarted out-of-band (operator redeploy,
+  crash), the proxy's stdio session dropped permanently: the reader goroutine
+  hit EOF, the `sync.Once`-guarded start never respawned, and **every**
+  subsequent `tools/call` failed until Claude Desktop itself was restarted. For
+  a fleet deployment, a single backend redeploy would break every user's
+  session. The proxy is now connection-aware: each child process is an isolated
+  connection, and on the next call after a drop it transparently re-spawns and
+  re-handshakes (`initialize` + `notifications/initialized`); an in-flight call
+  that sees the drop reconnects and retries once. Consecutive failed reconnects
+  back off exponentially (500 ms → 30 s) so a genuinely-down backend isn't
+  busy-respawned, and a call inside the backoff window gets a clean, retryable
+  error instead of a hard dead-session. The handshake is bounded by a 15 s
+  timeout (the old code could hang boot forever on a backend that stalled during
+  `initialize`). (#16)
+
+### Security
+- **Governance is unaffected by reconnect.** The forward/reconnect path runs only
+  **after** the decide verdict, so nothing is ever forwarded ungoverned during a
+  reconnect window. The in-flight retry is at-least-once — a retried call can
+  re-run a tool that already executed (a double side-effect for write tools);
+  this is inherent to transparent MCP reconnect without an idempotency key, is
+  acceptable for the read/lookup tools fronted today, and an at-most-once
+  contract for write tools is tracked as a follow-up (#17).
+
 ## [0.2.0] - 2026-06-09
 
 ### Changed
