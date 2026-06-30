@@ -23,6 +23,8 @@ conversation, and **audit** everything.
 That's it. Every `tools/call` is now checked against AxonFlow Decision Mode
 before it runs.
 
+**Desktop proxy setup & usage walkthrough** — install the governance proxy and see PII redaction + tool-call governance on a real MCP backend: [Watch on YouTube](https://youtu.be/_dlnX_xLYmU)
+
 ## Why a proxy, not a hook
 
 Claude **Desktop has no PreToolUse/PostToolUse hooks** — those are a Claude
