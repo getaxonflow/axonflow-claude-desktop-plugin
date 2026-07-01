@@ -158,6 +158,23 @@ func (d *DecideClient) Decide(ctx context.Context, req DecideRequest, traceparen
 	if d.cfg.ClientSecret != "" {
 		httpReq.Header.Set("Authorization", "Basic "+basicAuth(d.cfg.ClientID, d.cfg.ClientSecret))
 	}
+	// Per-developer + per-session identity (#2753/#2754). The proxy already
+	// forwards LeaderEmail as the opaque x-leader-identity context key (kept for
+	// SIEM join continuity), which lands in policy_details JSONB. We ALSO emit
+	// the canonical X-User-Email / X-Session-Id headers here for parity with the
+	// check-output call, which the platform DOES map into audit_logs.user_email.
+	// NOTE: /decide itself currently sources audit_logs.user_email from the
+	// authenticated user (user_token / synthesized), NOT from X-User-Email — so
+	// on this call the headers are forward-compatible; the platform-side header
+	// read for the REST/decide surface is tracked in axonflow-enterprise#2771.
+	// Omitted when empty (no blank header) so an unconfigured proxy degrades to
+	// the platform's neutral synthetic fallback.
+	if d.cfg.LeaderEmail != "" {
+		httpReq.Header.Set("X-User-Email", d.cfg.LeaderEmail)
+	}
+	if d.cfg.SessionID != "" {
+		httpReq.Header.Set("X-Session-Id", d.cfg.SessionID)
+	}
 	if traceparent != "" {
 		httpReq.Header.Set("Traceparent", traceparent)
 	}

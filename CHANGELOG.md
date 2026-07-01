@@ -6,6 +6,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **First-class per-developer + per-session identity on governed calls
+  ([axonflow-enterprise#2753](https://github.com/getaxonflow/axonflow-enterprise/issues/2753)/[#2754](https://github.com/getaxonflow/axonflow-enterprise/issues/2754)).**
+  The proxy now emits `X-User-Email` (`AXONFLOW_LEADER_EMAIL`) and `X-Session-Id`
+  (`AXONFLOW_SESSION_ID`) on the `/api/v1/decide` and `/api/v1/mcp/check-output`
+  calls, in addition to the existing `x-leader-identity` decide-context key
+  (retained for SIEM join continuity). The check-output path maps `X-User-Email`
+  into the canonical `audit_logs.user_email` column, so the customer-portal
+  **User** column now shows the Desktop leader instead of a synthetic id.
+  Identity is *asserted*, not verified.
+
 ## [0.2.1] - 2026-06-10
 
 ### Fixed

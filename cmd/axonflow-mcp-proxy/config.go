@@ -48,8 +48,8 @@ type Config struct {
 	RedactResponses string // AXONFLOW_REDACT_RESPONSES=always|on-obligation|off (default always)
 
 	// Identity stamped onto every Layer-1 audit row + forwarded to the PDP in
-	// the decision context map (BukuWarung Layer-2 headers).
-	LeaderEmail string // AXONFLOW_LEADER_EMAIL — the Desktop user
+	// the decision context map (Layer-2 audit headers).
+	LeaderEmail string // AXONFLOW_LEADER_EMAIL — the Desktop user (empty → omitted)
 	AIAgent     string // AXONFLOW_AI_AGENT — defaults to "claude-desktop"
 	SessionID   string // generated per process unless AXONFLOW_SESSION_ID is set
 
@@ -152,7 +152,12 @@ func LoadConfig() (Config, error) {
 		TenantID:     os.Getenv("AXONFLOW_TENANT_ID"),
 		OrgID:        os.Getenv("AXONFLOW_ORG_ID"),
 		FailOpen:     strings.EqualFold(envOr("AXONFLOW_FAIL_MODE", "closed"), "open"),
-		LeaderEmail:  envOr("AXONFLOW_LEADER_EMAIL", "unknown@bukuwarung.local"),
+		// Empty by default (no sentinel): an unconfigured proxy sends NO
+		// X-User-Email header, so the platform's neutral synthetic fallback
+		// (mcp-client:<clientID>) engages instead of a bogus stamped identity in
+		// audit_logs.user_email (#2754). Operators set AXONFLOW_LEADER_EMAIL to
+		// the real Desktop user.
+		LeaderEmail:  envOr("AXONFLOW_LEADER_EMAIL", ""),
 		AIAgent:      envOr("AXONFLOW_AI_AGENT", "claude-desktop"),
 		AuditLogPath: os.Getenv("AXONFLOW_AUDIT_LOG"),
 	}
