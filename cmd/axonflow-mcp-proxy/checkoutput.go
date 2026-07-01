@@ -156,6 +156,16 @@ func (c *CheckOutputClient) CheckOutput(ctx context.Context, message, traceparen
 	if c.cfg.ClientSecret != "" {
 		httpReq.Header.Set("Authorization", "Basic "+basicAuth(c.cfg.ClientID, c.cfg.ClientSecret))
 	}
+	// Per-developer + per-session identity (#2753/#2754), same as decide.go. The
+	// check-output path DOES read X-User-Email into audit_logs.user_email
+	// (platform/agent mcp_handler.go / circuitbreaker/handler.go), so this is the
+	// Desktop surface that populates the portal User column today.
+	if c.cfg.LeaderEmail != "" {
+		httpReq.Header.Set("X-User-Email", c.cfg.LeaderEmail)
+	}
+	if c.cfg.SessionID != "" {
+		httpReq.Header.Set("X-Session-Id", c.cfg.SessionID)
+	}
 	if traceparent != "" {
 		httpReq.Header.Set("Traceparent", traceparent)
 	}
