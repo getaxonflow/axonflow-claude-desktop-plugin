@@ -6,9 +6,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-02 — per-developer + per-session identity on governed calls
+
+Pairs with platform **≥ 9.3.0**, which ingests `X-User-Email` / `X-Session-Id`
+into the canonical audit row (migration `core/129`).
+
 ### Added
-- **First-class per-developer + per-session identity on governed calls
-  ([axonflow-enterprise#2753](https://github.com/getaxonflow/axonflow-enterprise/issues/2753)/[#2754](https://github.com/getaxonflow/axonflow-enterprise/issues/2754)).**
+- **First-class per-developer + per-session identity on governed calls.**
   The proxy now emits `X-User-Email` (`AXONFLOW_LEADER_EMAIL`) and `X-Session-Id`
   (`AXONFLOW_SESSION_ID`) on the `/api/v1/decide` and `/api/v1/mcp/check-output`
   calls, in addition to the existing `x-leader-identity` decide-context key
