@@ -543,6 +543,48 @@ func TestEnforce_FailOpen_On503_Forwards(t *testing.T) {
 	}
 }
 
+// TestEnforce_FailOpen_ResponsePlaneStillFailsClosed is the load-bearing
+// adversarial invariant: the RESPONSE plane is UNCONDITIONALLY fail-closed even
+// when the REQUEST plane is configured fail-OPEN. A fail-open posture forwards a
+// call when the PDP is degraded (503), but the forwarded tool response STILL must
+// be scanned by the engine before it enters Claude's context — and if that engine
+// is unreachable, the (already-executed) response must be BLOCKED, never leaked.
+// Without this, a fail-open deployment with a flaky check-output would ship raw
+// PII into the conversation.
+func TestEnforce_FailOpen_ResponsePlaneStillFailsClosed(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	// Request plane degraded → 503; posture is fail-open, so the call forwards.
+	d.status = http.StatusServiceUnavailable
+	d.resp = DecideResponse{Verdict: verdictDeny, TraceID: strings.Repeat("2", 32)}
+	// Response plane (check-output) is DOWN → 500. The redaction pass must fail
+	// closed and block the response.
+	d.coStatus = http.StatusInternalServerError
+	d.coResp = checkOutputResponse{}
+
+	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")},
+		callResult: json.RawMessage(`{"content":[{"type":"text","text":"NIK 3174012509900001"}]}`)}
+	p := newTestProxy(t, d.server.URL, be)
+	p.cfg.FailOpen = true
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`21`), ToolCallParams{Name: "lookup"})
+	e := mustParseError(t, resp)
+	if e.Code != codePolicyUnavailable {
+		t.Fatalf("response-plane fail-closed code = %d, want %d", e.Code, codePolicyUnavailable)
+	}
+	// The backend DID execute (fail-open forwarded the request)...
+	if be.callCount.Load() != 1 {
+		t.Fatalf("fail-open should have forwarded to the backend once, got %d", be.callCount.Load())
+	}
+	// ...but its (un-scannable) response must NOT be returned to Claude.
+	if resp.Result != nil {
+		t.Fatalf("un-redacted response must not be forwarded, got result=%s", string(resp.Result))
+	}
+	if strings.Contains(string(resp.Result)+e.Message, "3174012509900001") {
+		t.Fatalf("raw NIK leaked into the response to Claude")
+	}
+}
+
 func TestEnforce_ClientError_NeverFailOpen(t *testing.T) {
 	d := newDecideStub()
 	defer d.close()

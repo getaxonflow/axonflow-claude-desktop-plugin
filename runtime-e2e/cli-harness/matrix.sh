@@ -22,7 +22,8 @@
 #   request-only PII: export_ledger(aadhaar arg), clean response    (request-only)
 #   deny:    DROP / UNION / OR-true / injection-override /          (system policies)
 #            injection-reveal / dangerous-command
-#   deny:    DELETE / UPDATE / INSERT                               (BukuWarung bundle read-only)
+#   deny:    DELETE / UPDATE / INSERT                               (harness-org read-only block)
+#   needs_approval: wire_transfer -> compliance-rbi require_approval -> -32002 (HITL held)
 #   fail-closed: PDP unreachable -> -32003
 #   tenant-isolation: foreign tenant -> PDP 403 -> blocked
 # Every case is also run through the UNIVERSAL PII-leak detector (matrix_assert.py).
@@ -53,6 +54,9 @@ WORK="$(mktemp -d)"
 : "${AXONFLOW_LICENSE_KEY:?set AXONFLOW_LICENSE_KEY to an Enterprise license (org=$ORG)}"
 
 ok() { echo "==> $1"; }
+# psql into the harness stack's postgres. Defined up front so both the
+# harness-org policy seed (section 3a) and the breaker reset (section 3b) share it.
+PSQL() { docker compose -f "$COMPOSE" -p "$PROJECT" exec -T postgres psql -U axonflow -d axonflow "$@"; }
 cleanup() {
   rm -rf "$WORK"
   if [ "${KEEP_STACK:-0}" != "1" ] && [ "${REUSED_STACK:-0}" != "1" ]; then
@@ -113,6 +117,37 @@ else
   exit 1
 fi
 
+# --- 3a. seed policies scoped to the HARNESS's actual org/tenant ------------
+# The bundle above hard-codes org=bukuwarung + tenant=bukuwarung-{marketing,ops,
+# fintech}. This harness drives as org=$ORG / tenant=$ORG (the design partner's
+# eval org, bukuwarung-eval), so the bundle's tenant-scoped read-only rows never
+# fire here — the DELETE/UPDATE/INSERT cases would see a genuine PDP `allow` and
+# the proxy would (correctly) forward them. Seed the two verdict-shapes the
+# bundle can't provide for THIS org so cases 114-116 (read-only deny) and 117
+# (needs_approval) exercise a real PDP verdict rather than a vacuous pass:
+#   * read-only write/DDL block  → action=block          → verdict=deny (-32001)
+#   * require_approval            → category=compliance-rbi (NOT coerced by the
+#     detection ActionOverrides map, unlike sensitive-data/security/pii, which
+#     the /decide lever forces to block) → verdict=needs_approval (-32002)
+ok "seeding harness-org policies (org=$ORG, tenant=$ORG)"
+PSQL -c "INSERT INTO static_policies
+  (policy_id, name, category, tier, pattern, severity, description, action, priority, enabled, tenant_id, org_id, created_by, phase, action_request, action_response)
+ VALUES
+  ('shmatrix_readonly_write_block','SH matrix read-only (harness org)','security-sqli','tenant',
+   '(?i)(?:\bINSERT\s+INTO\s+\w|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\s+\w)',
+   'critical','Read-only write/DDL block scoped to the harness org/tenant.','block',95,true,
+   '$ORG','$ORG','sh-matrix','request','block',NULL),
+  ('shmatrix_require_approval','SH matrix require-approval (harness org)','compliance-rbi','tenant',
+   '(?i)wire_transfer',
+   'high','HITL approval gate scoped to the harness org/tenant.','require_approval',96,true,
+   '$ORG','$ORG','sh-matrix','request','require_approval',NULL)
+ ON CONFLICT (policy_id) DO UPDATE SET
+   category=EXCLUDED.category, pattern=EXCLUDED.pattern, action=EXCLUDED.action,
+   action_request=EXCLUDED.action_request, tenant_id=EXCLUDED.tenant_id,
+   org_id=EXCLUDED.org_id, enabled=true;" >/dev/null 2>&1 \
+  && echo "    harness-org read-only + require_approval policies seeded" \
+  || { echo "FATAL: harness-org policy seed failed"; exit 1; }
+
 # --- 3b. neutralise the anti-abuse circuit breaker for the test org --------
 # The agent trips a per-client circuit breaker after 5 policy violations in a
 # 5-min window (an anti-abuse feature, ORTHOGONAL to the proxy behaviour under
@@ -122,7 +157,6 @@ fi
 # so the change + a clean breaker state are loaded. This touches ONLY the test
 # org's anti-abuse config — it does not weaken any governance verdict.
 ok "neutralising anti-abuse circuit breaker for org=$ORG (test-only)"
-PSQL() { docker compose -f "$COMPOSE" -p "$PROJECT" exec -T postgres psql -U axonflow -d axonflow "$@"; }
 PSQL -c "INSERT INTO circuit_breaker_config (org_id, tenant_id, error_threshold, violation_threshold, window_seconds, default_timeout_seconds, max_timeout_seconds, enable_auto_recovery) VALUES ('$ORG','$ORG',100000,100000,60,30,300,true) ON CONFLICT (org_id, tenant_id) DO UPDATE SET error_threshold=EXCLUDED.error_threshold, violation_threshold=EXCLUDED.violation_threshold, window_seconds=EXCLUDED.window_seconds;" >/dev/null 2>&1 || true
 PSQL -c "DELETE FROM circuit_breaker WHERE org_id='$ORG';" >/dev/null 2>&1 || true
 docker compose -f "$COMPOSE" -p "$PROJECT" restart axonflow-agent >/dev/null 2>&1 || docker restart "${PROJECT}-axonflow-agent-1" >/dev/null 2>&1 || true

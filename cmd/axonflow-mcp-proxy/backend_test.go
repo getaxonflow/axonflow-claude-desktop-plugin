@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -64,6 +65,29 @@ func runStdioStub() {
 				// Sleep before responding so a test can kill the process while the
 				// request is in flight, exercising the in-flight reconnect+retry path.
 				time.Sleep(250 * time.Millisecond)
+			}
+			if p.Name == "exec_then_die" {
+				// Records the #17 at-most-once boundary. Each execution appends a
+				// marker line to PROXY_TEST_SIDEEFFECT_FILE (the tool's "side
+				// effect", standing in for a write). On the FIRST execution the
+				// process exits WITHOUT responding — the executed-but-died-before-
+				// reply case that forces a reconnect+retry. The retry lands on a
+				// fresh process, which sees a non-empty file and responds normally.
+				// A test asserting the file has exactly two lines proves the side
+				// effect fired twice (at-least-once) and no more (the single retry
+				// is the upper bound — never a retry storm).
+				if f := os.Getenv("PROXY_TEST_SIDEEFFECT_FILE"); f != "" {
+					prior, _ := os.ReadFile(f)
+					first := len(bytes.TrimSpace(prior)) == 0
+					fh, _ := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+					if fh != nil {
+						_, _ = fh.WriteString("exec\n")
+						_ = fh.Close()
+					}
+					if first {
+						os.Exit(0) // executed, then die before replying
+					}
+				}
 			}
 			args, _ := json.Marshal(p.Arguments)
 			writeStub(req.ID, json.RawMessage(`{"content":[{"type":"text","text":`+mustJSONString(string(args))+`}]}`), nil)

@@ -130,9 +130,45 @@ def psql(query):
     return out.stdout.strip()
 
 
-def db_verdict(decision_id):
-    raw = psql("SELECT policy_decision FROM audit_logs WHERE id = 'decide_%s'" % decision_id)
-    return raw or None
+# The DB stores the CANONICAL past-tense policy_decision vocabulary
+# (#2638/#2643: allowed | blocked | redacted | needs_approval | error), NOT the
+# wire verdict the /decide response carries (allow | deny | needs_approval). Map
+# the proxy-side wire verdict onto the persisted vocab so the representative
+# cross-check compares like-for-like. (Before this, the check compared the wire
+# word "allow" against the stored "allowed" and always failed — a false-red that
+# masked whether the DB row actually agreed with the proxy.)
+WIRE_TO_CANONICAL = {
+    "allow": "allowed",
+    "deny": "blocked",
+    "redacted": "redacted",
+    "needs_approval": "needs_approval",
+    "error": "error",
+}
+
+
+def db_row(decision_id):
+    """Verdict + the Desktop identity the proxy forwarded, for a decide row.
+
+    On the /decide plane the per-developer + per-session identity travels in
+    policy_details.context (x_leader_identity / x_session_id) — the first-class
+    audit_logs.user_email / .session_id columns are sourced from the
+    authenticated license today, with the REST/decide header read tracked in
+    axonflow-enterprise#2771. So the cross-check reads the context keys, which
+    is exactly what the proxy sends and what lands on the platform row now.
+    """
+    raw = psql(
+        "SELECT policy_decision || '\x1f' || "
+        "COALESCE(policy_details->'context'->>'x_leader_identity','') || '\x1f' || "
+        "COALESCE(policy_details->'context'->>'x_session_id','') "
+        "FROM audit_logs WHERE id = 'decide_%s'" % decision_id
+    )
+    if not raw:
+        return None
+    parts = raw.split("\x1f")
+    while len(parts) < 3:
+        parts.append("")
+    return {"policy_decision": parts[0], "x_leader_identity": parts[1],
+            "x_session_id": parts[2]}
 
 
 # --- load everything -------------------------------------------------------
@@ -168,6 +204,8 @@ CASES = {
     114: ("deny_readonly_delete", "deny", None),
     115: ("deny_readonly_update", "deny", None),
     116: ("deny_readonly_insert", "deny", None),
+    # ---- NEEDS_APPROVAL (HITL gate) ----
+    117: ("needs_approval_wire", "needs_approval", None),
 }
 
 # Tools whose execution-proof string must be ABSENT when a call is denied
@@ -208,6 +246,13 @@ for cid, (label, want_verdict, cell) in CASES.items():
         reached = [m for m in BACKEND_EXEC_MARKERS if m in body]
         check(not reached, f"[{label}] backend never executed (no exec marker)"
               + ("" if not reached else f" — LEAKED markers {reached}"))
+    elif want_verdict == "needs_approval":
+        code = o.get("error", {}).get("code")
+        check(code == -32002, f"[{label}] held for approval with -32002 (got {code})")
+        # a call held for HITL approval must NOT have been forwarded.
+        reached = [m for m in BACKEND_EXEC_MARKERS if m in body]
+        check(not reached, f"[{label}] backend never executed (approval-held)"
+              + ("" if not reached else f" — LEAKED markers {reached}"))
 
 # ---- audit cross-check ----------------------------------------------------
 print("\n[AUDIT] proxy Layer-1 rows + DB correlation")
@@ -244,17 +289,31 @@ def first_audit(pred):
     return next((r for r in main_audit if r.get("decision_id") and pred(r)), None)
 
 
+# want is the proxy-side WIRE verdict; it is mapped to the persisted canonical
+# vocab (WIRE_TO_CANONICAL) before the comparison, and the same DB row is
+# cross-checked to carry the per-developer + per-session identity the proxy
+# forwarded (user_email == leader, session_id present, x_leader_identity ==
+# leader) — proving the Desktop identity headers land on the platform row, not
+# just the local JSONL.
 representatives = [
     ("allow", first_audit(lambda r: r["tool_name"] == "export_ledger" and r["verdict"] == "allow"), "allow"),
     ("deny", first_audit(lambda r: r["tool_name"] == "run_sql_report" and r["verdict"] == "deny"), "deny"),
     ("redact", first_audit(lambda r: r["tool_name"] == "lookup_customer" and r.get("redaction_count", 0) > 0), "allow"),
+    ("needs_approval", first_audit(lambda r: r.get("verdict") == "needs_approval"), "needs_approval"),
 ]
 for name, row, want in representatives:
     check(row is not None, f"[{name}] a proxy audit row with a decision_id exists")
     if row:
-        v = db_verdict(row["decision_id"])
-        check(v == want,
-              f"[{name}] DB audit_logs row for decision_id={row['decision_id'][:8]}… reads policy_decision={want} (got {v})")
+        r = db_row(row["decision_id"])
+        want_canonical = WIRE_TO_CANONICAL.get(want, want)
+        v = r["policy_decision"] if r else None
+        check(v == want_canonical,
+              f"[{name}] DB audit_logs row for decision_id={row['decision_id'][:8]}… reads policy_decision={want_canonical} (got {v})")
+        if r:
+            check(r["x_leader_identity"] == LEADER and r["x_session_id"] == row.get("session_id"),
+                  f"[{name}] DB row carries the proxy-forwarded Desktop identity "
+                  f"(x_leader_identity={r['x_leader_identity']}, "
+                  f"x_session_id={r['x_session_id'][:16]}…)")
 
 # ---- FAIL-CLOSED ----------------------------------------------------------
 print("\n[FAIL-CLOSED] PDP unreachable → blocked, leak detector still runs")

@@ -50,6 +50,12 @@ MAIN = [
     call(114, "run_sql_report", {"sql": "DELETE FROM customers WHERE 1=1"}),
     call(115, "run_sql_report", {"sql": "UPDATE customers SET balance=0"}),
     call(116, "run_sql_report", {"sql": "INSERT INTO admin VALUES (1)"}),
+    # ---- NEEDS_APPROVAL (HITL gate: compliance-rbi require_approval) ----
+    # The PDP returns verdict=needs_approval; the proxy maps it to JSON-RPC
+    # -32002 and does NOT forward the call (the backend is never reached). This
+    # exercises the third terminal verdict alongside allow/deny so every branch
+    # of the proxy's verdict switch is driven by a real live decision.
+    call(117, "run_sql_report", {"q": "please wire_transfer 5000000 to account 999"}),
 ]
 
 # fail-closed: a benign call against a dead PDP must block (-32003).
@@ -79,4 +85,4 @@ write("main.req.jsonl", MAIN)
 write("failclosed.req.jsonl", FAILCLOSED)
 write("tenant.req.jsonl", TENANT)
 write("negcontrol.req.jsonl", NEGCONTROL)
-print(f"generated {len(MAIN)-3} main cases + fail-closed + tenant-isolation + neg-control")
+print(f"generated {len(MAIN)-3} main cases (incl. needs_approval) + fail-closed + tenant-isolation + neg-control")

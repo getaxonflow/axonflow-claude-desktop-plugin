@@ -137,6 +137,53 @@ func TestStdioBackend_ReconnectsDuringInFlightCall(t *testing.T) {
 	}
 }
 
+// TestStdioBackend_ReconnectRetriesAtMostOnce pins the #17 at-most-once boundary
+// for the transparent reconnect. A mutating tool that executed on the backend but
+// whose process died before replying is RE-DISPATCHED by the single reconnect
+// retry — so its side effect fires TWICE (the documented at-least-once). This
+// test locks that boundary from both sides: the effect must fire exactly twice
+// (proving the retry ran → the reconnect works AND is at-least-once) and NEVER
+// three-plus times (proving the retry is bounded to one → no retry storm, the
+// upper bound the #17 follow-up must not regress).
+func TestStdioBackend_ReconnectRetriesAtMostOnce(t *testing.T) {
+	sideEffect := t.TempDir() + "/exec.log"
+	b := newStdioBackend(BackendConfig{
+		ID:      "sfx",
+		Command: os.Args[0],
+		Env: map[string]string{
+			"PROXY_TEST_STDIO_STUB":      "1",
+			"PROXY_TEST_SIDEEFFECT_FILE": sideEffect,
+		},
+	})
+	defer b.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := b.Initialize(ctx); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+
+	// The tool executes (appends a marker), the process exits before replying, the
+	// reconnect retry lands on a fresh process which executes again and replies.
+	result, err := b.CallTool(ctx, "exec_then_die", map[string]interface{}{"k": "v"}, "")
+	if err != nil {
+		t.Fatalf("call should reconnect+retry to success, got: %v", err)
+	}
+	if !strings.Contains(string(result), `\"k\"`) {
+		t.Fatalf("retried call lost args: %s", string(result))
+	}
+
+	data, rerr := os.ReadFile(sideEffect)
+	if rerr != nil {
+		t.Fatalf("read side-effect log: %v", rerr)
+	}
+	execs := strings.Count(strings.TrimSpace(string(data)), "exec")
+	if execs != 2 {
+		t.Fatalf("#17 boundary: side effect fired %d times, want exactly 2 "+
+			"(original + one retry — at-least-once, bounded at two)", execs)
+	}
+}
+
 // fakeClock is a manually-advanced clock for deterministic backoff testing.
 type fakeClock struct{ t time.Time }
 
