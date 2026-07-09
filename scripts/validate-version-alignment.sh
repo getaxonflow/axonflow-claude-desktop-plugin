@@ -16,7 +16,10 @@
 #      version until the release commit bumps all three surfaces together.)
 #
 # Exit 0 when all three match; exit 1 with a diff-style report otherwise.
-set -euo pipefail
+# NB: no `set -e` — a failed extraction must reach its own diagnostic `fail`
+# below, not abort the assignment line under `set -e` (which would exit with a
+# bare, message-less non-zero). Still fail-closed: every path ends in fail/exit.
+set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
@@ -26,9 +29,14 @@ go_version="$(sed -n 's/^const proxyVersion = "\(.*\)"$/\1/p' cmd/axonflow-mcp-p
 [ -n "$go_version" ] || fail "could not extract proxyVersion from cmd/axonflow-mcp-proxy/main.go"
 
 # Same extraction build.sh uses (build.sh:17) — the value stamped on the .mcpb.
+# manifest.json's top-level "version" is the intended key; "manifest_version"
+# does not substring-match '"version"'. If a nested "version" is ever added
+# above line 5 this would need a jq-based read, but the flat manifest makes the
+# first-match safe today.
 manifest_version="$(grep -m1 '"version"' manifest.json | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
 [ -n "$manifest_version" ] || fail "could not extract version from manifest.json"
 
+# First release heading, skipping '## [Unreleased]' (only [0-9]-leading).
 changelog_version="$(grep -m1 -E '^## \[[0-9]' CHANGELOG.md | sed 's/^## \[\([^]]*\)\].*/\1/')"
 [ -n "$changelog_version" ] || fail "could not extract latest release heading from CHANGELOG.md"
 
