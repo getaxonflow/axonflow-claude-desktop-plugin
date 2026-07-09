@@ -28,8 +28,25 @@ import (
 )
 
 // proxyVersion is the proxy build version, surfaced in serverInfo + the .mcpb
-// manifest. Keep in lockstep with manifest.json + CHANGELOG.md.
+// manifest. Keep in lockstep with manifest.json + CHANGELOG.md — CI enforces
+// the alignment via scripts/validate-version-alignment.sh.
 const proxyVersion = "0.3.0"
+
+// axonflowClientHeader / axonflowClientValue identify this proxy build to the
+// AxonFlow engine on every governed call (#2860): the same ADR-050 §4
+// `X-Axonflow-Client: <client>/<version>` convention the claude-code plugin
+// uses, with the distinct client id "mcp-proxy" so per-client distribution
+// telemetry can separate Desktop-proxy versions from plugin versions.
+//
+// TELEMETRY ONLY — never auth. The engine authenticates exclusively via the
+// Authorization: Basic header (see decide.go / checkoutput.go); it logs this
+// header and MUST ignore it for authentication, so a missing or mangled value
+// can never fail a decision. proxyVersion is the single source of truth: this
+// value is derived from it at compile time, never hardcoded separately.
+const (
+	axonflowClientHeader = "X-Axonflow-Client"
+	axonflowClientValue  = "mcp-proxy/" + proxyVersion
+)
 
 // proxyProtocolVersion is the MCP protocol version the proxy advertises to
 // Claude Desktop. It echoes the client's requested version when the client

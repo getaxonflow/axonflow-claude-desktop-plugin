@@ -156,6 +156,9 @@ func (c *CheckOutputClient) CheckOutput(ctx context.Context, message, traceparen
 	if c.cfg.ClientSecret != "" {
 		httpReq.Header.Set("Authorization", "Basic "+basicAuth(c.cfg.ClientID, c.cfg.ClientSecret))
 	}
+	// Version identifier for per-client distribution telemetry (#2860) —
+	// telemetry-only, never auth; identical contract to the decide call.
+	httpReq.Header.Set(axonflowClientHeader, axonflowClientValue)
 	// Per-developer + per-session identity (#2753/#2754), same as decide.go. The
 	// check-output path DOES read X-User-Email into audit_logs.user_email
 	// (platform/agent mcp_handler.go / circuitbreaker/handler.go), so this is the
