@@ -158,6 +158,12 @@ func (d *DecideClient) Decide(ctx context.Context, req DecideRequest, traceparen
 	if d.cfg.ClientSecret != "" {
 		httpReq.Header.Set("Authorization", "Basic "+basicAuth(d.cfg.ClientID, d.cfg.ClientSecret))
 	}
+	// Version identifier for per-client distribution telemetry (#2860) —
+	// telemetry-only, deliberately OUTSIDE the auth path (the engine reads
+	// credentials ONLY from Authorization: Basic; see the note above). Always
+	// sent: the value is a compile-time constant derived from proxyVersion, so
+	// there is no empty/omit branch and no second version copy to drift.
+	httpReq.Header.Set(axonflowClientHeader, axonflowClientValue)
 	// Per-developer + per-session identity (#2753/#2754). The proxy already
 	// forwards LeaderEmail as the opaque x-leader-identity context key (kept for
 	// SIEM join continuity), which lands in policy_details JSONB. We ALSO emit

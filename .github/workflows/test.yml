@@ -19,6 +19,9 @@ jobs:
           go-version: '1.23'
           check-latest: true
 
+      - name: version alignment (proxyVersion == manifest.json == CHANGELOG)
+        run: ./scripts/validate-version-alignment.sh
+
       - name: gofmt
         run: |
           unformatted="$(gofmt -l cmd/ runtime-e2e/)"

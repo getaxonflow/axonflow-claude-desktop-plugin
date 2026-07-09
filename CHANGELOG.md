@@ -6,6 +6,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Version identifier on governed calls** (#2860, axonflow-enterprise). The
+  proxy now sends `X-Axonflow-Client: mcp-proxy/<version>` on every
+  `/api/v1/decide` and `/api/v1/mcp/check-output` call, so the platform's
+  per-client distribution telemetry can answer "which desktop-proxy versions
+  are deployed across this fleet?" the same way it does for the claude-code
+  plugin. Telemetry-only: the header is never used for authentication, and a
+  missing/mangled value never affects a decision. The value derives from the
+  single `proxyVersion` constant.
+- **Version-alignment CI gate** (`scripts/validate-version-alignment.sh`):
+  `proxyVersion` (main.go), `manifest.json`, and the latest CHANGELOG release
+  heading must agree — the drift class that hit the claude-code plugin
+  (its PR #105) can no longer ship silently now that the version is on the wire.
+- **cli-harness wire assertion** (`runtime-e2e/cli-harness/client_header.sh` +
+  `recorder/`): drives the real proxy through a header-recording reverse proxy
+  in front of a live enterprise agent and asserts the header on both calls,
+  plus fail-open (garbage/absent header → decision unaffected).
+
 ## [0.3.0] - 2026-07-02 — per-developer + per-session identity on governed calls
 
 Pairs with platform **≥ 9.3.0**, which ingests `X-User-Email` / `X-Session-Id`
