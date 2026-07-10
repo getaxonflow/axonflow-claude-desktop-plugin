@@ -30,7 +30,7 @@ import (
 // proxyVersion is the proxy build version, surfaced in serverInfo + the .mcpb
 // manifest. Keep in lockstep with manifest.json + CHANGELOG.md — CI enforces
 // the alignment via scripts/validate-version-alignment.sh.
-const proxyVersion = "0.3.0"
+const proxyVersion = "0.3.1"
 
 // axonflowClientHeader / axonflowClientValue identify this proxy build to the
 // AxonFlow engine on every governed call (#2860): the same ADR-050 §4

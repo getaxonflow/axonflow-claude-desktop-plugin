@@ -4,7 +4,7 @@ All notable changes to the AxonFlow Governance Claude Desktop extension are
 documented here. The format follows [Keep a Changelog](https://keepachangelog.com/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.1] - 2026-07-10
 
 ### Added
 - **Version identifier on governed calls.** The proxy now sends
@@ -208,6 +208,6 @@ Desktop Extension.
 - Unit tests (≥80% coverage) for verdict mapping, aggregation/routing,
   fail-closed posture, PII redaction, audit schema, and both backend transports.
 
-[Unreleased]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin/compare/v0.1.1...HEAD
+[0.3.1]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin/compare/v0.3.0...v0.3.1
 [0.1.1]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/getaxonflow/axonflow-claude-desktop-plugin/releases/tag/v0.1.0
