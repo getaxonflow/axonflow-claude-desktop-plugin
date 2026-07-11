@@ -159,7 +159,7 @@ func LoadConfig() (Config, error) {
 		// set AXONFLOW_LEADER_EMAIL to the real Desktop user; the platform
 		// attributes it to audit_logs.user_email only when its agent runs with
 		// AXONFLOW_TRUST_IDENTITY_HEADERS=true (axonflow-enterprise#2896,
-		// platform >= 9.8.1) — see decide.go / checkoutput.go.
+		// platform >= 9.9.0) — see decide.go / checkoutput.go.
 		LeaderEmail:  envOr("AXONFLOW_LEADER_EMAIL", ""),
 		AIAgent:      envOr("AXONFLOW_AI_AGENT", "claude-desktop"),
 		AuditLogPath: os.Getenv("AXONFLOW_AUDIT_LOG"),

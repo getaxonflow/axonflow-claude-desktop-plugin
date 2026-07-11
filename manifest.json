@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "axonflow-governance",
   "display_name": "AxonFlow Governance",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Governs Claude Desktop's MCP tool calls: enforces AxonFlow Decision Mode policy on every call, redacts PII from responses, and audits everything.",
   "long_description": "AxonFlow Governance is an MCP proxy for Claude Desktop. It fronts your internal MCP servers (CRM, BigQuery, back-office) and, on every `tools/call`, checks the call against AxonFlow Decision Mode (`POST /api/v1/decide`) before forwarding it. Policy-violating calls are blocked, PII is redacted from tool responses before it reaches the conversation, and every call is written to a Layer-1 audit trail with a `decision_id`/`trace_id` for SIEM correlation.\n\nClaude Desktop has no PreToolUse/PostToolUse hooks (those are Claude Code only) \u2014 the MCP layer is the only pre-execution interception point, so enforcement lives in this proxy. The proxy fails CLOSED by default: if the policy service is unreachable, tool calls are blocked.",
   "author": {
@@ -110,7 +110,7 @@
     "leader_email": {
       "type": "string",
       "title": "Leader email",
-      "description": "The Desktop user's email, stamped on every local audit row and asserted to the policy service (X-User-Email) for SIEM correlation. Lands in the platform audit trail only when your AxonFlow agent (>= 9.8.1, the release carrying axonflow-enterprise#2896) is started with AXONFLOW_TRUST_IDENTITY_HEADERS=true; never affects policy verdicts.",
+      "description": "The Desktop user's email, stamped on every local audit row and asserted to the policy service (X-User-Email) for SIEM correlation. Lands in the platform audit trail only when your AxonFlow agent (>= 9.9.0, the release carrying axonflow-enterprise#2896) is started with AXONFLOW_TRUST_IDENTITY_HEADERS=true; never affects policy verdicts.",
       "required": false,
       "default": ""
     },

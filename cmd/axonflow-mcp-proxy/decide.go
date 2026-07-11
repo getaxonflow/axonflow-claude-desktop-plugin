@@ -172,7 +172,7 @@ func (d *DecideClient) Decide(ctx context.Context, req DecideRequest, traceparen
 	// ASSERTED, not authenticated: the platform attributes them to
 	// audit_logs.user_email / session_id ONLY when its agent is started with
 	// AXONFLOW_TRUST_IDENTITY_HEADERS=true (axonflow-enterprise#2896, platform
-	// >= 9.8.1 — the trust-gated delivery of what the old #2771 note here
+	// >= 9.9.0 — the trust-gated delivery of what the old #2771 note here
 	// tracked). With the gate off (the default) the platform ignores the
 	// headers and audit_logs.user_email stays the validated fleet identity
 	// (user_token / license org). Attribution-only either way: the headers

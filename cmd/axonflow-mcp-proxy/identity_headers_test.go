@@ -18,7 +18,7 @@ import (
 // JSONB); it now ALSO asserts the first-class X-User-Email / X-Session-Id
 // headers. The platform attributes those to audit_logs.user_email /
 // session_id ONLY when its agent runs with AXONFLOW_TRUST_IDENTITY_HEADERS=true
-// (axonflow-enterprise#2896, platform >= 9.8.1); with the gate off (the
+// (axonflow-enterprise#2896, platform >= 9.9.0); with the gate off (the
 // default) it ignores them and attribution falls back to the validated fleet
 // identity. These tests pin the PROXY side of that contract — the gate state
 // is invisible to the proxy, so emission is unconditional-when-configured:
