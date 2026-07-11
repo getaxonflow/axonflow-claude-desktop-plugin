@@ -88,8 +88,8 @@ func TestDecide_OmitsIdentityHeadersWhenEmpty(t *testing.T) {
 // H1 fix (default LeaderEmail "" instead of a sentinel). It asserts LoadConfig
 // yields LeaderEmail=="" so both governed calls OMIT X-User-Email (the
 // platform then attributes its validated fallback identity — license org or
-// user_token user, no synthetic identity on these planes), while X-Session-Id
-// is still sent because LoadConfig always mints a SessionID.
+// user_token user; no mcp-client pseudo-identity on these planes), while
+// X-Session-Id is still sent because LoadConfig always mints a SessionID.
 func TestLoadConfig_UnsetLeaderEmail_OmitsUserEmailHeader(t *testing.T) {
 	t.Setenv("AXONFLOW_LEADER_EMAIL", "") // envOr → "" default (H1)
 	t.Setenv("AXONFLOW_BACKENDS_FILE", "")
