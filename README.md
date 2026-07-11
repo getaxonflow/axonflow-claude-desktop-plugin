@@ -57,7 +57,35 @@ extension.
 
 Every call writes one **Layer-1 audit row** (`session_id`, `leader_email`,
 `tool_name`, `parameters_hash`, `response_record_count`, `duration_ms`, plus
-`decision_id` / `trace_id` / `gateway_id` for SIEM correlation).
+`decision_id` / `trace_id` / `gateway_id` for SIEM correlation). That row is
+the **proxy's local JSONL** — it always carries `leader_email`.
+
+### Per-leader attribution in the *platform* audit trail (trust gate)
+
+The proxy also *asserts* the leader identity to AxonFlow on every governed
+call: `X-User-Email` (= `AXONFLOW_LEADER_EMAIL`) and `X-Session-Id` on both
+`/api/v1/decide` and `/api/v1/mcp/check-output`. Whether that identity lands
+in the **platform's** audit trail (`audit_logs.user_email` / `session_id` —
+what the customer-portal **User** column shows) is decided by the platform,
+not the proxy:
+
+- **Requires platform ≥ 9.8.1 (the release carrying axonflow-enterprise#2896)
+  with `AXONFLOW_TRUST_IDENTITY_HEADERS=true` set on the AxonFlow agent.**
+  The operator is declaring the proxy a trusted identity source. Scope that
+  honestly: the running conversation/model can never alter `leader_email`
+  mid-session, but in a self-service install the Desktop user sets it
+  themselves in Settings → Extensions — so turn the gate on only where
+  `leader_email` provisioning is controlled (e.g. MDM-managed extension
+  settings), or where self-asserted attribution is acceptable.
+- **Without the flag (the default), the platform ignores the headers**: its
+  audit rows are attributed to the validated identity — the license org, or
+  the `AXONFLOW_USER_TOKEN` user when that JWT identifies a person — not the
+  asserted leader. Per-leader attribution then exists only in the proxy's
+  local Layer-1 JSONL and, on **decide** rows, in the `x_leader_identity` key
+  inside `policy_details` (recorded regardless of the flag; gate-off
+  check-output rows carry no leader marker platform-side).
+- Either way the headers are **attribution-only** — they never influence a
+  policy verdict.
 
 ## Configuration
 
@@ -72,7 +100,7 @@ environment variables (see `manifest.json`):
 | Tenant / Org | `AXONFLOW_TENANT_ID` / `AXONFLOW_ORG_ID` | |
 | Fail mode | `AXONFLOW_FAIL_MODE` | `closed` (default) or `open` — request plane only; response redaction is always fail-closed |
 | Response redaction | `AXONFLOW_REDACT_RESPONSES` | `always` (default) · `on-obligation` (legacy: only on a `redact_pii` obligation / fail-open forward) · `off` (explicit opt-out footgun — disables the whole response-governance call, i.e. PII redaction **and** response-side SQLi/exfil hard-blocks) |
-| Leader email | `AXONFLOW_LEADER_EMAIL` | stamped on audit rows |
+| Leader email | `AXONFLOW_LEADER_EMAIL` | stamped on the proxy's local Layer-1 audit rows; asserted to the platform as `X-User-Email` — attributed into the platform audit trail only under the trust gate (see above) |
 | Backend servers file | `AXONFLOW_BACKENDS_FILE` | JSON map — see `config.example.json` |
 | Audit log path | `AXONFLOW_AUDIT_LOG` | optional JSONL sink |
 

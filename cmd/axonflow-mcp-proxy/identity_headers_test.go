@@ -15,10 +15,16 @@ import (
 // Per-developer + per-session identity on the Desktop proxy's platform-bound
 // HTTP calls (issue #2753/#2754). The proxy historically forwarded the leader
 // email only as the opaque x-leader-identity context key (→ policy_details
-// JSONB), never as the first-class X-User-Email header the platform maps into
-// audit_logs.user_email. These tests pin that both the decide and check-output
-// calls now emit X-User-Email + X-Session-Id when configured, and omit them
-// when empty (no blank header).
+// JSONB); it now ALSO asserts the first-class X-User-Email / X-Session-Id
+// headers. The platform attributes those to audit_logs.user_email /
+// session_id ONLY when its agent runs with AXONFLOW_TRUST_IDENTITY_HEADERS=true
+// (axonflow-enterprise#2896, platform >= 9.8.1); with the gate off (the
+// default) it ignores them and attribution falls back to the validated fleet
+// identity. These tests pin the PROXY side of that contract — the gate state
+// is invisible to the proxy, so emission is unconditional-when-configured:
+// both the decide and check-output calls emit X-User-Email + X-Session-Id
+// when configured, omit them when empty (no blank header), and emit the SAME
+// values on both planes.
 
 // captureHeaders stands up an httptest server that records the last request's
 // X-User-Email / X-Session-Id and returns a minimal valid JSON body.
@@ -80,9 +86,10 @@ func TestDecide_OmitsIdentityHeadersWhenEmpty(t *testing.T) {
 // (master R3 M1): it drives the real LoadConfig with AXONFLOW_LEADER_EMAIL
 // unset — the state a fleet-default install actually produces after the #2754
 // H1 fix (default LeaderEmail "" instead of a sentinel). It asserts LoadConfig
-// yields LeaderEmail=="" so both governed calls OMIT X-User-Email (letting the
-// platform's neutral synthetic fallback engage), while X-Session-Id is still
-// sent because LoadConfig always mints a SessionID.
+// yields LeaderEmail=="" so both governed calls OMIT X-User-Email (the
+// platform then attributes its validated fallback identity — license org or
+// user_token user; no mcp-client pseudo-identity on these planes), while
+// X-Session-Id is still sent because LoadConfig always mints a SessionID.
 func TestLoadConfig_UnsetLeaderEmail_OmitsUserEmailHeader(t *testing.T) {
 	t.Setenv("AXONFLOW_LEADER_EMAIL", "") // envOr → "" default (H1)
 	t.Setenv("AXONFLOW_BACKENDS_FILE", "")
@@ -182,5 +189,38 @@ func TestDecideRequest_RetainsLeaderIdentityContext(t *testing.T) {
 	}
 	if body.Context["x-leader-identity"] != "alice@example.com" {
 		t.Errorf("x-leader-identity context entry dropped: %v", body.Context)
+	}
+}
+
+// TestIdentityHeaders_DecideCheckOutputParity pins the #2896 WS2 contract: for
+// one Config, the decide and check-output calls assert the SAME identity
+// header values. The platform's trust gate (AXONFLOW_TRUST_IDENTITY_HEADERS)
+// attributes per-plane independently, so a value drift between the proxy's two
+// clients would silently split one leader's audit trail across two identities
+// the moment an operator turns the gate on.
+func TestIdentityHeaders_DecideCheckOutputParity(t *testing.T) {
+	cfg := Config{
+		ClientID: "org", ClientSecret: "s",
+		LeaderEmail: "dana@example.com", SessionID: "sess-desktop-3",
+		Timeout: time.Second,
+	}
+
+	dURL, dEmail, dSession := captureHeaders(t, `{"verdict":"allow"}`)
+	cfg.Endpoint = dURL
+	if _, _, err := NewDecideClient(cfg).Decide(context.Background(), DecideRequest{Stage: "tool"}, ""); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+
+	cURL, cEmail, cSession := captureHeaders(t, `{"allowed":true}`)
+	cfg.Endpoint = cURL
+	if _, err := NewCheckOutputClient(cfg).CheckOutput(context.Background(), "hello", ""); err != nil {
+		t.Fatalf("CheckOutput: %v", err)
+	}
+
+	if *dEmail != "dana@example.com" || *cEmail != "dana@example.com" {
+		t.Errorf("X-User-Email drift: decide=%q check-output=%q, want dana@example.com on both", *dEmail, *cEmail)
+	}
+	if *dSession != "sess-desktop-3" || *cSession != "sess-desktop-3" {
+		t.Errorf("X-Session-Id drift: decide=%q check-output=%q, want sess-desktop-3 on both", *dSession, *cSession)
 	}
 }

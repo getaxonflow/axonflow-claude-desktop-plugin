@@ -159,10 +159,20 @@ func (c *CheckOutputClient) CheckOutput(ctx context.Context, message, traceparen
 	// Version identifier for per-client distribution telemetry (#2860) —
 	// telemetry-only, never auth; identical contract to the decide call.
 	httpReq.Header.Set(axonflowClientHeader, axonflowClientValue)
-	// Per-developer + per-session identity (#2753/#2754), same as decide.go. The
-	// check-output path DOES read X-User-Email into audit_logs.user_email
-	// (platform/agent mcp_handler.go / circuitbreaker/handler.go), so this is the
-	// Desktop surface that populates the portal User column today.
+	// Per-developer + per-session identity (#2753/#2754), same as decide.go.
+	// ASSERTED, not authenticated: the platform attributes these headers to
+	// audit_logs.user_email / session_id ONLY when its agent is started with
+	// AXONFLOW_TRUST_IDENTITY_HEADERS=true (axonflow-enterprise#2896, platform
+	// >= 9.8.1 — the operator declares this proxy a trusted identity source.
+	// The conversation/model can never alter AXONFLOW_LEADER_EMAIL mid-session,
+	// but a self-service Desktop user CAN edit it in Settings → Extensions, so
+	// the gate belongs on fleets that control leader_email provisioning — see
+	// the README trust-gate section). With the gate off (the default) the
+	// platform ignores the headers and attributes the validated fleet identity
+	// instead — per-leader attribution does NOT land. Attribution-only either
+	// way: the headers never influence a verdict. The proxy sends them
+	// whenever configured, so a gated deployment gets per-leader attribution
+	// with no proxy change.
 	if c.cfg.LeaderEmail != "" {
 		httpReq.Header.Set("X-User-Email", c.cfg.LeaderEmail)
 	}

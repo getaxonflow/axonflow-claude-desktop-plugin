@@ -166,15 +166,18 @@ func (d *DecideClient) Decide(ctx context.Context, req DecideRequest, traceparen
 	httpReq.Header.Set(axonflowClientHeader, axonflowClientValue)
 	// Per-developer + per-session identity (#2753/#2754). The proxy already
 	// forwards LeaderEmail as the opaque x-leader-identity context key (kept for
-	// SIEM join continuity), which lands in policy_details JSONB. We ALSO emit
-	// the canonical X-User-Email / X-Session-Id headers here for parity with the
-	// check-output call, which the platform DOES map into audit_logs.user_email.
-	// NOTE: /decide itself currently sources audit_logs.user_email from the
-	// authenticated user (user_token / synthesized), NOT from X-User-Email — so
-	// on this call the headers are forward-compatible; the platform-side header
-	// read for the REST/decide surface is tracked in axonflow-enterprise#2771.
-	// Omitted when empty (no blank header) so an unconfigured proxy degrades to
-	// the platform's neutral synthetic fallback.
+	// SIEM join continuity), which lands in policy_details JSONB regardless of
+	// any platform flag. We ALSO emit the canonical X-User-Email / X-Session-Id
+	// headers, identically on this call and check-output (checkoutput.go).
+	// ASSERTED, not authenticated: the platform attributes them to
+	// audit_logs.user_email / session_id ONLY when its agent is started with
+	// AXONFLOW_TRUST_IDENTITY_HEADERS=true (axonflow-enterprise#2896, platform
+	// >= 9.8.1 — the trust-gated delivery of what the old #2771 note here
+	// tracked). With the gate off (the default) the platform ignores the
+	// headers and audit_logs.user_email stays the validated fleet identity
+	// (user_token / license org). Attribution-only either way: the headers
+	// never influence a verdict. Omitted when empty (no blank header) so an
+	// unconfigured proxy degrades to the platform's validated fallback.
 	if d.cfg.LeaderEmail != "" {
 		httpReq.Header.Set("X-User-Email", d.cfg.LeaderEmail)
 	}
