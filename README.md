@@ -69,7 +69,7 @@ in the **platform's** audit trail (`audit_logs.user_email` / `session_id` —
 what the customer-portal **User** column shows) is decided by the platform,
 not the proxy:
 
-- **Requires platform ≥ 9.8.1 (the release carrying axonflow-enterprise#2896)
+- **Requires platform ≥ 9.9.0 (the release carrying axonflow-enterprise#2896)
   with `AXONFLOW_TRUST_IDENTITY_HEADERS=true` set on the AxonFlow agent.**
   The operator is declaring the proxy a trusted identity source. Scope that
   honestly: the running conversation/model can never alter `leader_email`

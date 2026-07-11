@@ -163,7 +163,7 @@ func (c *CheckOutputClient) CheckOutput(ctx context.Context, message, traceparen
 	// ASSERTED, not authenticated: the platform attributes these headers to
 	// audit_logs.user_email / session_id ONLY when its agent is started with
 	// AXONFLOW_TRUST_IDENTITY_HEADERS=true (axonflow-enterprise#2896, platform
-	// >= 9.8.1 — the operator declares this proxy a trusted identity source.
+	// >= 9.9.0 — the operator declares this proxy a trusted identity source.
 	// The conversation/model can never alter AXONFLOW_LEADER_EMAIL mid-session,
 	// but a self-service Desktop user CAN edit it in Settings → Extensions, so
 	// the gate belongs on fleets that control leader_email provisioning — see
