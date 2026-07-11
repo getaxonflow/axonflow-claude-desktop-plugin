@@ -69,16 +69,21 @@ in the **platform's** audit trail (`audit_logs.user_email` / `session_id` —
 what the customer-portal **User** column shows) is decided by the platform,
 not the proxy:
 
-- **Requires platform ≥ 9.8.1 with `AXONFLOW_TRUST_IDENTITY_HEADERS=true` set
-  on the AxonFlow agent** (axonflow-enterprise#2896). The operator is
-  declaring the proxy a trusted identity source — legitimate here, because
-  Claude Desktop users cannot override the extension's configured
-  `leader_email`.
+- **Requires platform ≥ 9.8.1 (the release carrying axonflow-enterprise#2896)
+  with `AXONFLOW_TRUST_IDENTITY_HEADERS=true` set on the AxonFlow agent.**
+  The operator is declaring the proxy a trusted identity source. Scope that
+  honestly: the running conversation/model can never alter `leader_email`
+  mid-session, but in a self-service install the Desktop user sets it
+  themselves in Settings → Extensions — so turn the gate on only where
+  `leader_email` provisioning is controlled (e.g. MDM-managed extension
+  settings), or where self-asserted attribution is acceptable.
 - **Without the flag (the default), the platform ignores the headers**: its
-  audit rows are attributed to the validated fleet identity (the license
-  org), not the individual leader. Per-leader attribution then exists only in
-  the proxy's local Layer-1 JSONL and in the `x_leader_identity` key inside
-  `policy_details` (which is recorded regardless of the flag).
+  audit rows are attributed to the validated identity — the license org, or
+  the `AXONFLOW_USER_TOKEN` user when that JWT identifies a person — not the
+  asserted leader. Per-leader attribution then exists only in the proxy's
+  local Layer-1 JSONL and, on **decide** rows, in the `x_leader_identity` key
+  inside `policy_details` (recorded regardless of the flag; gate-off
+  check-output rows carry no leader marker platform-side).
 - Either way the headers are **attribution-only** — they never influence a
   policy verdict.
 

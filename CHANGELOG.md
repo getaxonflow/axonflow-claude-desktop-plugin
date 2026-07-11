@@ -15,9 +15,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   Desktop leader. That was **wrong**: `/api/v1/decide` and
   `/api/v1/mcp/check-output` — the only two platform calls this proxy makes —
   ignored the header on every platform release before 9.8.1, so per-leader
-  attribution never landed in the *platform* audit trail (the proxy's local
-  Layer-1 JSONL and the `x_leader_identity` key in `policy_details` were
-  always correct). From platform **9.8.1** (axonflow-enterprise#2896) both
+  attribution never landed in the *platform* audit trail via these headers —
+  gate-off rows carry the validated identity: the license org, or the
+  `AXONFLOW_USER_TOKEN` user when that JWT identifies a person (the default
+  fleet config sends none). The proxy's local Layer-1 JSONL and the
+  decide-row `x_leader_identity` key in `policy_details` were always correct.
+  From platform **9.8.1** (the release carrying axonflow-enterprise#2896) both
   planes attribute `X-User-Email` / `X-Session-Id` to
   `audit_logs.user_email` / `session_id` — **only when the agent is started
   with `AXONFLOW_TRUST_IDENTITY_HEADERS=true`** (default off; the headers are
@@ -49,13 +52,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 > **Correction (2026-07-11, axonflow-enterprise#2896):** the platform-side
 > claims below were wrong. Platform 9.3.0's header ingest (migration
-> `core/129`) covered *other* governance planes (MCP-server `tools/call`,
-> check-input) — **not** the `decide` / `check-output` planes this proxy
-> calls, which ignored `X-User-Email` entirely until platform 9.8.1, and from
-> 9.8.1 honor it only when the agent sets
-> `AXONFLOW_TRUST_IDENTITY_HEADERS=true`. The header *emission* shipped in
-> 0.3.0 exactly as described; the platform-side mapping did not exist. See
-> `[Unreleased]` above.
+> `core/129`) covered *other* governance planes (MCP-server `tools/call` for
+> both headers, check-input for `X-User-Email` only) — **not** the `decide` /
+> `check-output` planes this proxy calls, which ignored `X-User-Email`
+> entirely until platform 9.8.1 (the release carrying #2896), and from 9.8.1
+> honor it only when the agent sets `AXONFLOW_TRUST_IDENTITY_HEADERS=true`.
+> The header *emission* shipped in 0.3.0 exactly as described; the
+> platform-side mapping did not exist. See `[Unreleased]` above.
 
 Pairs with platform **≥ 9.3.0**, which ingests `X-User-Email` / `X-Session-Id`
 into the canonical audit row (migration `core/129`).
