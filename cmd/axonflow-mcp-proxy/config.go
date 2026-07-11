@@ -153,10 +153,12 @@ func LoadConfig() (Config, error) {
 		OrgID:        os.Getenv("AXONFLOW_ORG_ID"),
 		FailOpen:     strings.EqualFold(envOr("AXONFLOW_FAIL_MODE", "closed"), "open"),
 		// Empty by default (no sentinel): an unconfigured proxy sends NO
-		// X-User-Email header, so the platform's neutral synthetic fallback
-		// (mcp-client:<clientID>) engages instead of a bogus stamped identity in
-		// audit_logs.user_email (#2754). Operators set AXONFLOW_LEADER_EMAIL to
-		// the real Desktop user.
+		// X-User-Email header, so platform audit rows carry the validated
+		// fleet identity instead of a bogus stamped value (#2754). Operators
+		// set AXONFLOW_LEADER_EMAIL to the real Desktop user; the platform
+		// attributes it to audit_logs.user_email only when its agent runs with
+		// AXONFLOW_TRUST_IDENTITY_HEADERS=true (axonflow-enterprise#2896,
+		// platform >= 9.8.1) — see decide.go / checkoutput.go.
 		LeaderEmail:  envOr("AXONFLOW_LEADER_EMAIL", ""),
 		AIAgent:      envOr("AXONFLOW_AI_AGENT", "claude-desktop"),
 		AuditLogPath: os.Getenv("AXONFLOW_AUDIT_LOG"),

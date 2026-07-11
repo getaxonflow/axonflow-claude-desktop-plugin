@@ -4,6 +4,27 @@ All notable changes to the AxonFlow Governance Claude Desktop extension are
 documented here. The format follows [Keep a Changelog](https://keepachangelog.com/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Corrected the per-leader platform-attribution claim** (docs + comments
+  only — no behavior change; the proxy emits the exact same headers as
+  0.3.0/0.3.1). Since 0.3.0, this changelog, `checkoutput.go`, and the README
+  claimed the platform's check-output path maps `X-User-Email` into
+  `audit_logs.user_email`, so the customer-portal **User** column shows the
+  Desktop leader. That was **wrong**: `/api/v1/decide` and
+  `/api/v1/mcp/check-output` — the only two platform calls this proxy makes —
+  ignored the header on every platform release before 9.8.1, so per-leader
+  attribution never landed in the *platform* audit trail (the proxy's local
+  Layer-1 JSONL and the `x_leader_identity` key in `policy_details` were
+  always correct). From platform **9.8.1** (axonflow-enterprise#2896) both
+  planes attribute `X-User-Email` / `X-Session-Id` to
+  `audit_logs.user_email` / `session_id` — **only when the agent is started
+  with `AXONFLOW_TRUST_IDENTITY_HEADERS=true`** (default off; the headers are
+  attribution-only and never influence a verdict). See the README
+  "Per-leader attribution in the *platform* audit trail (trust gate)"
+  section. (#2896 WS2)
+
 ## [0.3.1] - 2026-07-10
 
 ### Added
@@ -25,6 +46,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
   plus fail-open (garbage/absent header → decision unaffected).
 
 ## [0.3.0] - 2026-07-02 — per-developer + per-session identity on governed calls
+
+> **Correction (2026-07-11, axonflow-enterprise#2896):** the platform-side
+> claims below were wrong. Platform 9.3.0's header ingest (migration
+> `core/129`) covered *other* governance planes (MCP-server `tools/call`,
+> check-input) — **not** the `decide` / `check-output` planes this proxy
+> calls, which ignored `X-User-Email` entirely until platform 9.8.1, and from
+> 9.8.1 honor it only when the agent sets
+> `AXONFLOW_TRUST_IDENTITY_HEADERS=true`. The header *emission* shipped in
+> 0.3.0 exactly as described; the platform-side mapping did not exist. See
+> `[Unreleased]` above.
 
 Pairs with platform **≥ 9.3.0**, which ingests `X-User-Email` / `X-Session-Id`
 into the canonical audit row (migration `core/129`).

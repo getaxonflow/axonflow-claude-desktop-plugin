@@ -110,7 +110,7 @@
     "leader_email": {
       "type": "string",
       "title": "Leader email",
-      "description": "The Desktop user's email, stamped on every audit row and forwarded to the policy service for SIEM correlation.",
+      "description": "The Desktop user's email, stamped on every local audit row and asserted to the policy service (X-User-Email) for SIEM correlation. Lands in the platform audit trail only when your AxonFlow agent (>= 9.8.1) is started with AXONFLOW_TRUST_IDENTITY_HEADERS=true; never affects policy verdicts.",
       "required": false,
       "default": ""
     },
