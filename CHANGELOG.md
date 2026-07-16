@@ -4,6 +4,22 @@ All notable changes to the AxonFlow Governance Claude Desktop extension are
 documented here. The format follows [Keep a Changelog](https://keepachangelog.com/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Documentation
+- **`AXONFLOW_USER_TOKEN` documented against the per-user token contract**
+  (docs only — no behavior change, no release): the README and the extension
+  UI description now say where the token comes from (admin mint API
+  `POST /api/v1/admin/organizations/{org_id}/user-tokens` or a tenant-OIDC
+  access token; see the platform's per-user token provisioning guide) and
+  what each token state does — verified live against a current-main
+  enterprise stack (getaxonflow/axonflow-enterprise#2946): a valid minted
+  token attributes decide **and** check-output audit rows to the token's
+  user; absent falls back to the org service identity; an expired / revoked /
+  malformed token is a platform 401 (`security_event: user_token_rejected`)
+  the proxy surfaces as a structured `-32003` deny — never fail-open, even
+  under `AXONFLOW_FAIL_MODE=open`.
+
 ## [0.3.2] - 2026-07-11
 
 ### Fixed
