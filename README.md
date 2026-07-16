@@ -108,18 +108,23 @@ environment variables (see `manifest.json`):
 
 `AXONFLOW_USER_TOKEN` is a **per-user token** your AxonFlow admin mints from
 the customer portal's admin API
-(`POST /api/v1/admin/organizations/{org_id}/user-tokens`), or an OIDC access
-token from the tenant's configured IdP — see the platform's
-[per-user token provisioning guide](https://github.com/getaxonflow/axonflow-enterprise/blob/main/docs/enterprise/per-user-token-provisioning.md).
+(`POST /api/v1/admin/organizations/{org_id}/user-tokens`) — see the platform's
+[per-user token provisioning guide](https://github.com/getaxonflow/axonflow-enterprise/blob/main/docs/enterprise/per-user-token-provisioning.md)
+(access-gated: the enterprise repo is private; ask your AxonFlow contact if
+the link 404s for you).
 The proxy forwards it as the body `user_token` on both governed planes
 (`/api/v1/decide` and `/api/v1/mcp/check-output`), and the platform — not the
-proxy — validates it: signature (HS256 for admin-minted tokens, the tenant's
-JWKS for OIDC tokens), expiry, and — for minted tokens — the revocation
-deny-list.
+proxy — validates it: HS256 signature, expiry, and the revocation deny-list.
+Only **admin-minted (HS256) tokens** work here: the planes this proxy calls
+pin the accepted algorithm to HS256, so a tenant-OIDC access token (RS256) is
+rejected — OIDC per-user tokens apply to the platform's `X-User-Token` header
+planes (MCP-server and agent-proxied REST), not to this proxy.
 
 Unlike `AXONFLOW_LEADER_EMAIL` (asserted, honored only under the trust gate
 above), the user token is **cryptographically validated**: no platform flag is
-needed for its attribution to land.
+needed for its attribution to land. (If the trust gate **is** on and
+`AXONFLOW_LEADER_EMAIL` is also set, the asserted leader email takes
+precedence in the audit row's `user_email` — the role stays the token's.)
 
 | Token state | Request plane (`decide`) | Platform audit row |
 |---|---|---|

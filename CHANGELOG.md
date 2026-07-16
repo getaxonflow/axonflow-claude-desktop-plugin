@@ -10,8 +10,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 - **`AXONFLOW_USER_TOKEN` documented against the per-user token contract**
   (docs only — no behavior change, no release): the README and the extension
   UI description now say where the token comes from (admin mint API
-  `POST /api/v1/admin/organizations/{org_id}/user-tokens` or a tenant-OIDC
-  access token; see the platform's per-user token provisioning guide) and
+  `POST /api/v1/admin/organizations/{org_id}/user-tokens`; admin-minted
+  HS256 tokens only — the planes this proxy calls reject OIDC/RS256 tokens;
+  see the platform's per-user token provisioning guide) and
   what each token state does — verified live against a current-main
   enterprise stack (getaxonflow/axonflow-enterprise#2946): a valid minted
   token attributes decide **and** check-output audit rows to the token's
