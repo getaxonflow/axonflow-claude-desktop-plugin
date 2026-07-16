@@ -6,7 +6,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Documentation
+### Changed
 - **`AXONFLOW_USER_TOKEN` documented against the per-user token contract**
   (docs only — no behavior change, no release): the README and the extension
   UI description now say where the token comes from (admin mint API

@@ -113,7 +113,9 @@ token from the tenant's configured IdP — see the platform's
 [per-user token provisioning guide](https://github.com/getaxonflow/axonflow-enterprise/blob/main/docs/enterprise/per-user-token-provisioning.md).
 The proxy forwards it as the body `user_token` on both governed planes
 (`/api/v1/decide` and `/api/v1/mcp/check-output`), and the platform — not the
-proxy — validates it (HS256 signature, expiry, revocation deny-list).
+proxy — validates it: signature (HS256 for admin-minted tokens, the tenant's
+JWKS for OIDC tokens), expiry, and — for minted tokens — the revocation
+deny-list.
 
 Unlike `AXONFLOW_LEADER_EMAIL` (asserted, honored only under the trust gate
 above), the user token is **cryptographically validated**: no platform flag is
@@ -123,12 +125,13 @@ needed for its attribution to land.
 |---|---|---|
 | **valid minted token** | verdict per policy | attributed to the token's user (email + role) on decide **and** check-output rows |
 | **absent** (left blank) | verdict per policy | attributed to the org's service identity (`<org>@axonflow.local`) |
-| **expired / revoked / malformed** | the platform 401s with `verdict: deny`; the proxy surfaces a structured JSON-RPC `-32003` deny (`policy service rejected the request — check proxy credentials/config`) and the backend is **never called**. This is never fail-open — a rejected token is a governance verdict, not an outage, so `AXONFLOW_FAIL_MODE=open` does not forward it. The audit row records `blocked` with `security_event: user_token_rejected`. |
+| **expired / revoked / malformed** | the platform 401s with `verdict: deny`; the proxy surfaces a structured JSON-RPC `-32003` deny (`policy service rejected the request (check proxy credentials/config)`) and the backend is **never called**. This is never fail-open — a rejected token is a governance verdict, not an outage, so `AXONFLOW_FAIL_MODE=open` does not forward it. | `blocked` with `security_event: user_token_rejected` |
 
 So: leave it blank for service-identity attribution, set it to a minted token
 for per-user attribution — and when calls suddenly start failing with the
-`-32003` credentials message, an **expired or revoked user token** is the first
-thing to check (rotate it via the same admin API).
+`-32003` `policy service rejected the request (check proxy credentials/config)`
+message, an **expired or revoked user token** is the first thing to check
+(rotate it via the same admin API).
 
 ### PII posture: redact (chat default) vs. block
 
