@@ -29,10 +29,17 @@ import (
 // reference schema so the marshalled JSON reads top-to-bottom as the Risk
 // Committee defined it.
 type AuditRow struct {
-	Timestamp           string `json:"timestamp"`
-	SessionID           string `json:"session_id"`
-	LeaderEmail         string `json:"leader_email"`
-	ToolName            string `json:"tool_name"`
+	Timestamp   string `json:"timestamp"`
+	SessionID   string `json:"session_id"`
+	LeaderEmail string `json:"leader_email"`
+	ToolName    string `json:"tool_name"`
+	// Server is the resolved backend MCP server identity (e.g. "crm"), split
+	// out of the possibly-namespaced exposed tool name (e.g. "crm__lookup")
+	// so the audit row and the /decide request agree on a clean tool/server
+	// split. Populated in both single- and multi-backend mode (every route
+	// resolves to exactly one configured backend); ToolName itself is only
+	// namespaced when multiBackend() is true.
+	Server              string `json:"server,omitempty"`
 	ParametersHash      string `json:"parameters_hash"`
 	ResponseRecordCount int    `json:"response_record_count"`
 	DurationMs          int64  `json:"duration_ms"`

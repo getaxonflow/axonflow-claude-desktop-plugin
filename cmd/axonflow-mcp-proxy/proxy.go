@@ -201,6 +201,15 @@ type callOutcome struct {
 	evaluatedPolicies []string
 	recordCount       int
 	redactionCount    int
+	// originalToolName and backendID are the resolved route split — the
+	// unprefixed backend tool name and the backend it belongs to — so the
+	// Layer-1 audit row can log the clean split instead of the inbound,
+	// possibly-namespaced exposed name (e.g. "crm__lookup"). Populated once
+	// lookupRoute resolves the call; left empty on early failures where no
+	// route was ever resolved (unknown tool, routing unavailable), and
+	// HandleToolsCall falls back to the raw exposed name in that case.
+	originalToolName string
+	backendID        string
 }
 
 // HandleToolsCall enforces Decision Mode on one tools/call and writes exactly
@@ -209,10 +218,20 @@ func (p *Proxy) HandleToolsCall(ctx context.Context, id json.RawMessage, params 
 	start := time.Now()
 	outcome := p.enforce(ctx, id, params)
 
+	// toolName prefers the resolved, unprefixed backend tool name (clean even
+	// in multi-backend mode, e.g. "lookup" rather than "crm__lookup"). It
+	// falls back to the raw exposed name when no route was ever resolved
+	// (unknown tool, routing unavailable) — there is no clean split to log.
+	toolName := outcome.originalToolName
+	if toolName == "" {
+		toolName = params.Name
+	}
+
 	row := p.audit.Record(AuditRow{
 		SessionID:           p.cfg.SessionID,
 		LeaderEmail:         p.cfg.LeaderEmail,
-		ToolName:            params.Name,
+		ToolName:            toolName,
+		Server:              outcome.backendID,
 		ParametersHash:      hashParameters(params.Arguments),
 		ResponseRecordCount: outcome.recordCount,
 		DurationMs:          time.Since(start).Milliseconds(),
@@ -250,7 +269,7 @@ func (p *Proxy) enforce(ctx context.Context, id json.RawMessage, params ToolCall
 			OrgID:     p.cfg.OrgID,
 			TenantID:  p.cfg.TenantID,
 		},
-		Target: DecisionTarget{Type: "tool", Tool: r.originalName},
+		Target: DecisionTarget{Type: "tool", Server: r.backendID, Tool: r.originalName},
 		Query:  buildDecideQuery(r.originalName, params.Arguments),
 		// Enterprise JWT, optional — a PEP that has the Desktop user's token
 		// forwards it so the audit row carries the validated user.
@@ -277,7 +296,7 @@ func (p *Proxy) enforce(ctx context.Context, id json.RawMessage, params ToolCall
 		// degradation — forwarding would be silently ungoverned, so it is
 		// NEVER fail-open regardless of posture.
 		if isClientError(err) {
-			return callOutcome{verdict: verdictDeny,
+			return callOutcome{verdict: verdictDeny, originalToolName: r.originalName, backendID: r.backendID,
 				response: errorResponse(id, codePolicyUnavailable, "policy service rejected the request (check proxy credentials/config)")}
 		}
 		// Transport error / 5xx (PDP unreachable). Honour the posture: fail-open
@@ -288,7 +307,7 @@ func (p *Proxy) enforce(ctx context.Context, id json.RawMessage, params ToolCall
 			logStderr("fail-open: PDP unreachable — forwarding ungoverned (redaction still applied)")
 			return p.forwardAndRedact(ctx, id, r, params, DecideResponse{}, true)
 		}
-		return callOutcome{verdict: verdictDeny,
+		return callOutcome{verdict: verdictDeny, originalToolName: r.originalName, backendID: r.backendID,
 			response: errorResponse(id, codePolicyUnavailable, "policy service unavailable (fail-closed)")}
 	}
 
@@ -297,6 +316,8 @@ func (p *Proxy) enforce(ctx context.Context, id json.RawMessage, params ToolCall
 		decisionID:        resp.DecisionID,
 		traceID:           resp.TraceID,
 		evaluatedPolicies: resp.EvaluatedPolicies,
+		originalToolName:  r.originalName,
+		backendID:         r.backendID,
 	}
 
 	// 503 = breaker tripped / PDP degraded. Apply the configured posture.
@@ -354,6 +375,8 @@ func (p *Proxy) forwardAndRedact(ctx context.Context, id json.RawMessage, r rout
 		decisionID:        decision.DecisionID,
 		traceID:           decision.TraceID,
 		evaluatedPolicies: decision.EvaluatedPolicies,
+		originalToolName:  r.originalName,
+		backendID:         r.backendID,
 	}
 	if forced {
 		out.verdict = "allow_failopen"

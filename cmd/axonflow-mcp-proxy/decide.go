@@ -46,10 +46,14 @@ type CallerIdentity struct {
 	TenantID  string `json:"tenant_id,omitempty"`
 }
 
-// DecisionTarget mirrors decision_handler.go:139.
+// DecisionTarget mirrors decision_handler.go:139. Server carries the resolved
+// backend MCP server identity (epic #2905 / axonflow-enterprise#2904) as a
+// first-class field, replacing the Context["backend"] side channel this proxy
+// used before the platform's DecisionTarget grew a Server field.
 type DecisionTarget struct {
-	Type string `json:"type,omitempty"`
-	Tool string `json:"tool,omitempty"`
+	Type   string `json:"type,omitempty"`
+	Server string `json:"server,omitempty"`
+	Tool   string `json:"tool,omitempty"`
 }
 
 // DecideResponse mirrors decision_handler.go:150 (DecideResponse). expires_at
