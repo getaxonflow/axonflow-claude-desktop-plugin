@@ -1,0 +1,117 @@
+name: Release
+
+# Release automation for the .mcpb Desktop Extension (#27) — previously every
+# release was cut by hand (build.sh → tag → gh release create + attach).
+# A `v*` tag push now produces the GitHub release with the multi-arch .mcpb
+# attached and the CHANGELOG section as notes, no manual steps.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # macOS runner is REQUIRED: build.sh lipo-merges the darwin arm64+amd64
+    # binaries into a universal binary and falls back to arm64-ONLY when lipo
+    # is unavailable (any Linux runner) — the universal-binary gate below would
+    # catch it, but run where the full artifact can actually be built.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          # no cache: the module is dependency-free (no go.sum), caching
+          # would only emit a not-found warning on every run
+          cache: false
+
+      # Node 24 for the official mcpb CLI: build.sh prefers `mcpb pack`
+      # (manifest-validating) over its plain-zip fallback when the CLI is on
+      # PATH — releases must always take the validated path.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      # Pinned like the actions: the mcpb CLI packs the shipped artifact, so
+      # a floating latest could alter the release with zero diff in this repo.
+      - name: Install mcpb CLI
+        run: |
+          npm install -g @anthropic-ai/mcpb@2.1.2
+          command -v mcpb
+
+      # The three version surfaces (proxyVersion const / manifest.json /
+      # CHANGELOG latest entry) must agree...
+      - name: Version-alignment gate
+        run: ./scripts/validate-version-alignment.sh
+
+      # ...and the pushed tag must be that same version, or the release would
+      # attach an artifact whose on-wire version differs from its tag.
+      - name: Tag ↔ manifest guard
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          MANIFEST_VERSION="$(grep -m1 '"version"' manifest.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')"
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match manifest.json version ${MANIFEST_VERSION} — re-tag or bump the release surfaces."
+            exit 1
+          fi
+          echo "VERSION=${TAG_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Build .mcpb
+        run: ./build.sh
+
+      # Hard multi-arch gate on the packed artifact: darwin must be a
+      # universal (x86_64 + arm64) binary, and linux amd64 + arm64 + windows
+      # amd64 must all be present. Single-arch is a release blocker
+      # (same rule as the platform images).
+      - name: Multi-arch gate
+        run: |
+          set -euo pipefail
+          PKG="build/axonflow-governance-${VERSION}.mcpb"
+          [ -f "$PKG" ] || { echo "::error::$PKG not produced by build.sh"; exit 1; }
+          LISTING="$(unzip -l "$PKG")"
+          echo "$LISTING"
+          for f in server/axonflow-mcp-proxy-darwin server/axonflow-mcp-proxy-linux-amd64 server/axonflow-mcp-proxy-linux-arm64 server/axonflow-mcp-proxy-windows-amd64.exe manifest.json; do
+            echo "$LISTING" | grep -q " $f\$" || { echo "::error::$PKG is missing $f"; exit 1; }
+          done
+          LIPO_INFO="$(lipo -info build/mcpb/server/axonflow-mcp-proxy-darwin)"
+          echo "$LIPO_INFO"
+          case "$LIPO_INFO" in
+            *x86_64*arm64*|*arm64*x86_64*) echo "darwin binary is universal" ;;
+            *) echo "::error::darwin binary is not universal (lipo: $LIPO_INFO) — did build.sh hit the no-lipo fallback?"; exit 1 ;;
+          esac
+
+      # Release notes = the CHANGELOG section for this exact version,
+      # fail-closed when absent (mirrors the n8n-node release workflow).
+      - name: Extract CHANGELOG section
+        run: |
+          awk -v ver="$VERSION" '$0 ~ "^## \\["ver"\\]" {p=1; next} p && /^## \[/ {exit} p {print}' CHANGELOG.md > /tmp/release-body.md
+          if [ ! -s /tmp/release-body.md ]; then
+            echo "::error::No CHANGELOG.md section found for version $VERSION — refusing to release."
+            echo "::error::Add a '## [$VERSION] - YYYY-MM-DD' section to CHANGELOG.md and re-tag."
+            exit 1
+          fi
+          {
+            echo "## AxonFlow Governance for Claude Desktop v${VERSION}"
+            echo ""
+            echo "### Installation"
+            echo ""
+            echo "Download \`axonflow-governance-${VERSION}.mcpb\` below and install it via Claude Desktop **Settings → Extensions** (macOS universal, Linux amd64/arm64, Windows amd64 — one package covers all)."
+            echo ""
+            cat /tmp/release-body.md
+          } > /tmp/release-body-final.md
+          echo "Release body: $(wc -l < /tmp/release-body-final.md) lines"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
+        with:
+          name: ${{ github.ref_name }}
+          body_path: /tmp/release-body-final.md
+          generate_release_notes: false
+          files: build/axonflow-governance-*.mcpb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
