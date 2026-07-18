@@ -14,11 +14,12 @@ import (
 	"time"
 )
 
-// Layer-1 audit (BukuWarung 4-layer audit framework, Layer 1: MCP-server
+// Layer-1 audit (design-partner 4-layer audit framework, Layer 1: MCP-server
 // logging). Each governed tools/call writes exactly one JSON line. The schema
-// is field-for-field identical to the Python reference
-// (examples/mcp-decision-mode/audit_log.py) so a single SIEM parser ingests
-// both the reference PEP and this proxy.
+// is an additive superset of the Python reference
+// (examples/mcp-decision-mode/audit_log.py): every reference field is written
+// identically, plus the split tool identity (server) — so a single tolerant
+// SIEM parser ingests both the reference PEP and this proxy.
 //
 // Required Risk-Committee field set: timestamp, session_id, leader_email,
 // tool_name, parameters_hash, response_record_count, duration_ms. The AxonFlow
