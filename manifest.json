@@ -81,7 +81,7 @@
     "user_token": {
       "type": "string",
       "title": "User token (enterprise JWT)",
-      "description": "Optional enterprise JWT for the Desktop user, so the audit row carries the validated user. Leave blank to use a service identity.",
+      "description": "Optional per-user token for the Desktop user, minted by your AxonFlow admin via the portal admin API (POST /api/v1/admin/organizations/{org_id}/user-tokens), so platform audit rows carry the validated user. Admin-minted (HS256) tokens only — OIDC access tokens are not accepted on the planes this proxy calls. Leave blank to use a service identity. An expired or revoked token blocks every call (structured deny, never fail-open) until rotated.",
       "sensitive": true,
       "required": false,
       "default": ""

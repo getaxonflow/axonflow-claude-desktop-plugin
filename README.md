@@ -96,13 +96,47 @@ environment variables (see `manifest.json`):
 |---|---|---|
 | AxonFlow endpoint | `AXONFLOW_ENDPOINT` | e.g. `https://app.getaxonflow.com:8090` |
 | Client ID / secret | `AXONFLOW_CLIENT_ID` / `AXONFLOW_CLIENT_SECRET` | secret is masked + stored securely |
-| User token (JWT) | `AXONFLOW_USER_TOKEN` | optional; enterprise validated-user audit |
+| User token (JWT) | `AXONFLOW_USER_TOKEN` | optional; enterprise validated-user audit — an admin-minted per-user token (see below) |
 | Tenant / Org | `AXONFLOW_TENANT_ID` / `AXONFLOW_ORG_ID` | |
 | Fail mode | `AXONFLOW_FAIL_MODE` | `closed` (default) or `open` — request plane only; response redaction is always fail-closed |
 | Response redaction | `AXONFLOW_REDACT_RESPONSES` | `always` (default) · `on-obligation` (legacy: only on a `redact_pii` obligation / fail-open forward) · `off` (explicit opt-out footgun — disables the whole response-governance call, i.e. PII redaction **and** response-side SQLi/exfil hard-blocks) |
 | Leader email | `AXONFLOW_LEADER_EMAIL` | stamped on the proxy's local Layer-1 audit rows; asserted to the platform as `X-User-Email` — attributed into the platform audit trail only under the trust gate (see above) |
 | Backend servers file | `AXONFLOW_BACKENDS_FILE` | JSON map — see `config.example.json` |
 | Audit log path | `AXONFLOW_AUDIT_LOG` | optional JSONL sink |
+
+### User token (`AXONFLOW_USER_TOKEN`): per-user validated attribution
+
+`AXONFLOW_USER_TOKEN` is a **per-user token** your AxonFlow admin mints from
+the customer portal's admin API
+(`POST /api/v1/admin/organizations/{org_id}/user-tokens`) — see the platform's
+[per-user token provisioning guide](https://github.com/getaxonflow/axonflow-enterprise/blob/main/docs/enterprise/per-user-token-provisioning.md)
+(access-gated: the enterprise repo is private; ask your AxonFlow contact if
+the link 404s for you).
+The proxy forwards it as the body `user_token` on both governed planes
+(`/api/v1/decide` and `/api/v1/mcp/check-output`), and the platform — not the
+proxy — validates it: HS256 signature, expiry, and the revocation deny-list.
+Only **admin-minted (HS256) tokens** work here: the planes this proxy calls
+pin the accepted algorithm to HS256, so a tenant-OIDC access token (RS256) is
+rejected — OIDC per-user tokens apply to the platform's `X-User-Token` header
+planes (MCP-server and agent-proxied REST), not to this proxy.
+
+Unlike `AXONFLOW_LEADER_EMAIL` (asserted, honored only under the trust gate
+above), the user token is **cryptographically validated**: no platform flag is
+needed for its attribution to land. (If the trust gate **is** on and
+`AXONFLOW_LEADER_EMAIL` is also set, the asserted leader email takes
+precedence in the audit row's `user_email` — the role stays the token's.)
+
+| Token state | Request plane (`decide`) | Platform audit row |
+|---|---|---|
+| **valid minted token** | verdict per policy | attributed to the token's user (email + role) on decide **and** check-output rows |
+| **absent** (left blank) | verdict per policy | attributed to the org's service identity (`<org>@axonflow.local`) |
+| **expired / revoked / malformed** | the platform 401s with `verdict: deny`; the proxy surfaces a structured JSON-RPC `-32003` deny (`policy service rejected the request (check proxy credentials/config)`) and the backend is **never called**. This is never fail-open — a rejected token is a governance verdict, not an outage, so `AXONFLOW_FAIL_MODE=open` does not forward it. | `blocked` with `security_event: user_token_rejected` |
+
+So: leave it blank for service-identity attribution, set it to a minted token
+for per-user attribution — and when calls suddenly start failing with the
+`-32003` `policy service rejected the request (check proxy credentials/config)`
+message, an **expired or revoked user token** is the first thing to check
+(rotate it via the same admin API).
 
 ### PII posture: redact (chat default) vs. block
 
