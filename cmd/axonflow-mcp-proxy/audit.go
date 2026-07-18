@@ -14,11 +14,12 @@ import (
 	"time"
 )
 
-// Layer-1 audit (BukuWarung 4-layer audit framework, Layer 1: MCP-server
+// Layer-1 audit (design-partner 4-layer audit framework, Layer 1: MCP-server
 // logging). Each governed tools/call writes exactly one JSON line. The schema
-// is field-for-field identical to the Python reference
-// (examples/mcp-decision-mode/audit_log.py) so a single SIEM parser ingests
-// both the reference PEP and this proxy.
+// is an additive superset of the Python reference
+// (examples/mcp-decision-mode/audit_log.py): every reference field is written
+// identically, plus the split tool identity (server) — so a single tolerant
+// SIEM parser ingests both the reference PEP and this proxy.
 //
 // Required Risk-Committee field set: timestamp, session_id, leader_email,
 // tool_name, parameters_hash, response_record_count, duration_ms. The AxonFlow
@@ -29,10 +30,17 @@ import (
 // reference schema so the marshalled JSON reads top-to-bottom as the Risk
 // Committee defined it.
 type AuditRow struct {
-	Timestamp           string `json:"timestamp"`
-	SessionID           string `json:"session_id"`
-	LeaderEmail         string `json:"leader_email"`
-	ToolName            string `json:"tool_name"`
+	Timestamp   string `json:"timestamp"`
+	SessionID   string `json:"session_id"`
+	LeaderEmail string `json:"leader_email"`
+	ToolName    string `json:"tool_name"`
+	// Server is the resolved backend MCP server identity (e.g. "crm"), split
+	// out of the possibly-namespaced exposed tool name (e.g. "crm__lookup")
+	// so the audit row and the /decide request agree on a clean tool/server
+	// split. Populated in both single- and multi-backend mode (every route
+	// resolves to exactly one configured backend); ToolName itself is only
+	// namespaced when multiBackend() is true.
+	Server              string `json:"server,omitempty"`
 	ParametersHash      string `json:"parameters_hash"`
 	ResponseRecordCount int    `json:"response_record_count"`
 	DurationMs          int64  `json:"duration_ms"`

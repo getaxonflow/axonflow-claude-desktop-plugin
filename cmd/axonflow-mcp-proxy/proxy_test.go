@@ -676,6 +676,134 @@ func TestAggregation_SkipsUnhealthyBackend(t *testing.T) {
 	}
 }
 
+// captureAudit wires p.audit to decode each Layer-1 line into an AuditRow,
+// appending it to *rows. Lets a test assert the emitted audit row's field
+// values directly (e.g. the tool/server split) instead of only its side
+// effects on the response.
+func captureAudit(p *Proxy, rows *[]AuditRow) {
+	p.audit = &AuditLogger{out: func(line string) {
+		var row AuditRow
+		if err := json.Unmarshal([]byte(line), &row); err == nil {
+			*rows = append(*rows, row)
+		}
+	}}
+}
+
+// TestHandleToolsCall_MultiBackend_AuditRowSplitsServerAndTool proves #2911
+// part 1 + part 2: in multi-backend mode the inbound tools/call name is
+// namespaced ("crm__lookup"), but the Layer-1 audit row must log the clean,
+// unprefixed tool name plus a populated Server field — and the /decide
+// request must carry the same split as first-class Target fields, not just
+// buried in Context["backend"].
+func TestHandleToolsCall_MultiBackend_AuditRowSplitsServerAndTool(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-ms", TraceID: strings.Repeat("d", 32)}
+
+	be1 := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")},
+		callResult: json.RawMessage(`{"content":[{"type":"text","text":"ok"}]}`)}
+	be2 := &fakeBackend{id: "bq", tools: []json.RawMessage{toolDescriptor("lookup")}} // forces namespacing
+	p := newTestProxy(t, d.server.URL, be1, be2)
+
+	var rows []AuditRow
+	captureAudit(p, &rows)
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`20`),
+		ToolCallParams{Name: "crm__lookup", Arguments: map[string]interface{}{"id": "c1"}})
+	if resp.Error != nil {
+		t.Fatalf("expected allow, got error %+v", resp.Error)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 audit row, got %d", len(rows))
+	}
+	row := rows[0]
+	if row.ToolName != "lookup" {
+		t.Fatalf("multi-backend audit row tool_name = %q, want unprefixed %q", row.ToolName, "lookup")
+	}
+	if row.Server != "crm" {
+		t.Fatalf("multi-backend audit row server = %q, want %q", row.Server, "crm")
+	}
+	if be1.lastTool != "lookup" {
+		t.Fatalf("backend invoked with %q, want unprefixed lookup", be1.lastTool)
+	}
+
+	// /decide must carry the same split as first-class Target fields.
+	if d.lastReq.Target.Tool != "lookup" {
+		t.Fatalf("decide target.tool = %q, want lookup", d.lastReq.Target.Tool)
+	}
+	if d.lastReq.Target.Server != "crm" {
+		t.Fatalf("decide target.server = %q, want crm", d.lastReq.Target.Server)
+	}
+	// Context["backend"] is kept alongside (harmless redundancy) for continuity.
+	if d.lastReq.Context["backend"] != "crm" {
+		t.Fatalf("decide context[backend] = %v, want crm (kept for compatibility)", d.lastReq.Context["backend"])
+	}
+}
+
+// TestHandleToolsCall_SingleBackend_AuditRowUnaffected proves the fix doesn't
+// disturb single-backend (multiBackend() == false) posture: tool names pass
+// through unprefixed exactly as before, and Server is now populated too since
+// every route (single- or multi-backend) resolves to exactly one backend.
+func TestHandleToolsCall_SingleBackend_AuditRowUnaffected(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	d.resp = DecideResponse{Verdict: verdictAllow, DecisionID: "dec-sb", TraceID: strings.Repeat("e", 32)}
+
+	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")},
+		callResult: json.RawMessage(`{"content":[{"type":"text","text":"ok"}]}`)}
+	p := newTestProxy(t, d.server.URL, be)
+
+	var rows []AuditRow
+	captureAudit(p, &rows)
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`21`), ToolCallParams{Name: "lookup"})
+	if resp.Error != nil {
+		t.Fatalf("expected allow, got error %+v", resp.Error)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 audit row, got %d", len(rows))
+	}
+	row := rows[0]
+	if row.ToolName != "lookup" {
+		t.Fatalf("single-backend audit row tool_name = %q, want unprefixed %q (unaffected by fix)", row.ToolName, "lookup")
+	}
+	if row.Server != "crm" {
+		t.Fatalf("single-backend audit row server = %q, want %q", row.Server, "crm")
+	}
+	if d.lastReq.Target.Server != "crm" {
+		t.Fatalf("decide target.server = %q, want crm", d.lastReq.Target.Server)
+	}
+}
+
+// TestHandleToolsCall_UnknownTool_AuditRowFallsBackToRawName proves that when
+// no route is ever resolved (unknown tool), the audit row falls back to the
+// raw exposed name rather than logging an empty tool_name — there's no clean
+// split available for a tool that doesn't exist.
+func TestHandleToolsCall_UnknownTool_AuditRowFallsBackToRawName(t *testing.T) {
+	d := newDecideStub()
+	defer d.close()
+	be := &fakeBackend{id: "crm", tools: []json.RawMessage{toolDescriptor("lookup")}}
+	p := newTestProxy(t, d.server.URL, be)
+
+	var rows []AuditRow
+	captureAudit(p, &rows)
+
+	resp := p.HandleToolsCall(context.Background(), json.RawMessage(`22`), ToolCallParams{Name: "nonexistent"})
+	if resp.Error == nil {
+		t.Fatalf("expected unknown-tool error")
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 audit row, got %d", len(rows))
+	}
+	row := rows[0]
+	if row.ToolName != "nonexistent" {
+		t.Fatalf("unknown-tool audit row tool_name = %q, want raw fallback %q", row.ToolName, "nonexistent")
+	}
+	if row.Server != "" {
+		t.Fatalf("unknown-tool audit row server = %q, want empty (no route resolved)", row.Server)
+	}
+}
+
 func TestServe_InitializeToolsListCall(t *testing.T) {
 	d := newDecideStub()
 	defer d.close()

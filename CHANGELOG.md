@@ -7,6 +7,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Behavior change — local audit rows carry split tool identity.** Each Layer-1 audit line now includes a `server` field (the backend id), and in multi-backend mode `tool_name` records the backend-local tool name (e.g. `lookup`) instead of the namespaced exposed name (e.g. `crm__lookup`). SIEM queries keyed on namespaced `tool_name` values must move to `server` + `tool_name`; single-backend deployments see no `tool_name` change. The `/decide` request additionally sends `target.server` — additive, ignored by platforms older than 9.10.0, policy matching on `tool` unchanged on every platform version.
+
 - **`AXONFLOW_USER_TOKEN` documented against the per-user token contract**
   (docs only — no behavior change, no release): the README and the extension
   UI description now say where the token comes from (admin mint API
@@ -75,7 +77,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 > entirely until platform 9.9.0 (the release carrying #2896), and from 9.9.0
 > honor it only when the agent sets `AXONFLOW_TRUST_IDENTITY_HEADERS=true`.
 > The header *emission* shipped in 0.3.0 exactly as described; the
-> platform-side mapping did not exist. See `[Unreleased]` above.
+> platform-side mapping did not exist. See `[0.3.2]` above.
 
 Pairs with platform **≥ 9.3.0**, which ingests `X-User-Email` / `X-Session-Id`
 into the canonical audit row (migration `core/129`).
