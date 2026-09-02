@@ -7,6 +7,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Wire identity renamed — `X-Axonflow-Client` now sends `claude-desktop-plugin/<version>`, was `mcp-proxy/<version>`.** The old id named the binary and matched neither this repository nor the product, so AxonFlow-side distribution telemetry filed this extension under a name no dashboard, docs page or support conversation would look for. **0.3.2 is the last version that sends `mcp-proxy`.** The header is telemetry attribution only and is never used for authentication, so this changes nothing about how a request is authorised; the AxonFlow platform continues to accept the old id for one release so proxies already in the field are not dropped mid-upgrade. No configuration change is required.
+
 - **Behavior change — local audit rows carry split tool identity.** Each Layer-1 audit line now includes a `server` field (the backend id), and in multi-backend mode `tool_name` records the backend-local tool name (e.g. `lookup`) instead of the namespaced exposed name (e.g. `crm__lookup`). SIEM queries keyed on namespaced `tool_name` values must move to `server` + `tool_name`; single-backend deployments see no `tool_name` change. The `/decide` request additionally sends `target.server` — additive, ignored by platforms older than 9.10.0, policy matching on `tool` unchanged on every platform version.
 
 - **`AXONFLOW_USER_TOKEN` documented against the per-user token contract**
