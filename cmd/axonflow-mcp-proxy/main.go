@@ -35,8 +35,16 @@ const proxyVersion = "0.3.2"
 // axonflowClientHeader / axonflowClientValue identify this proxy build to the
 // AxonFlow engine on every governed call (#2860): the same ADR-050 §4
 // `X-Axonflow-Client: <client>/<version>` convention the claude-code plugin
-// uses, with the distinct client id "mcp-proxy" so per-client distribution
-// telemetry can separate Desktop-proxy versions from plugin versions.
+// uses, with a distinct client id so per-client distribution telemetry can
+// separate Desktop-proxy versions from plugin versions.
+//
+// The id is "claude-desktop-plugin" as of this change. It was "mcp-proxy",
+// which named the BINARY and matched neither this repo nor the product, and
+// which the server's plugin vocabulary does not use for anything else - so
+// rows for the Claude Desktop extension sorted under a name no dashboard,
+// docs page or support conversation would look for. The server keeps
+// accepting "mcp-proxy" for one release so proxies in the field are not
+// dropped mid-upgrade; 0.3.2 is the last version that sends it.
 //
 // TELEMETRY ONLY — never auth. The engine authenticates exclusively via the
 // Authorization: Basic header (see decide.go / checkoutput.go); it logs this
@@ -45,7 +53,7 @@ const proxyVersion = "0.3.2"
 // value is derived from it at compile time, never hardcoded separately.
 const (
 	axonflowClientHeader = "X-Axonflow-Client"
-	axonflowClientValue  = "mcp-proxy/" + proxyVersion
+	axonflowClientValue  = "claude-desktop-plugin/" + proxyVersion
 )
 
 // proxyProtocolVersion is the MCP protocol version the proxy advertises to

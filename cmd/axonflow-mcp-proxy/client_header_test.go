@@ -17,7 +17,7 @@ import (
 // (clientInfo/serverInfo), so the engine had zero visibility into which
 // desktop-proxy versions are deployed. These tests pin that BOTH governed
 // calls — decide and check-output — now emit
-// X-Axonflow-Client: mcp-proxy/<proxyVersion>, that the value is derived from
+// X-Axonflow-Client: claude-desktop-plugin/<proxyVersion>, that the value is derived from
 // the single proxyVersion source, and that it is sent unconditionally (it is
 // telemetry, not identity — there is no omit branch).
 
@@ -43,7 +43,7 @@ func TestDecide_EmitsClientVersionHeader(t *testing.T) {
 	if _, _, err := c.Decide(context.Background(), DecideRequest{Stage: "tool"}, ""); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if want := "mcp-proxy/" + proxyVersion; *got != want {
+	if want := "claude-desktop-plugin/" + proxyVersion; *got != want {
 		t.Errorf("decide X-Axonflow-Client = %q, want %q", *got, want)
 	}
 }
@@ -54,7 +54,7 @@ func TestCheckOutput_EmitsClientVersionHeader(t *testing.T) {
 	if _, err := c.CheckOutput(context.Background(), "hello", ""); err != nil {
 		t.Fatalf("CheckOutput: %v", err)
 	}
-	if want := "mcp-proxy/" + proxyVersion; *got != want {
+	if want := "claude-desktop-plugin/" + proxyVersion; *got != want {
 		t.Errorf("check-output X-Axonflow-Client = %q, want %q", *got, want)
 	}
 }
@@ -75,12 +75,19 @@ func TestClientVersionHeader_SentWithEmptyIdentityConfig(t *testing.T) {
 }
 
 // TestClientVersionHeaderValue_Shape guards the wire format the engine-side
-// parser (ParseClient: last-"/" split) and the enterprise capture's
-// validation expect: exactly "mcp-proxy/<semver>". A rename or a malformed
-// version constant would silently land in the engine's drop bucket.
+// parser (ParseClient: last-"/" split) and the enterprise capture's validation
+// expect: exactly "claude-desktop-plugin/<semver>". A malformed version
+// constant would silently land in the engine's drop bucket.
+//
+// The id itself is pinned here rather than left to the constant, and that is
+// the point: an id the server's vocabulary does not know is dropped SILENTLY,
+// so a rename must be a deliberate edit to this line paired with the
+// server-side allowlist, never a quiet drift. This id was "mcp-proxy" through
+// 0.3.2; the enterprise validator keeps accepting that value for one release
+// so proxies already in the field are not dropped mid-upgrade.
 func TestClientVersionHeaderValue_Shape(t *testing.T) {
-	shape := regexp.MustCompile(`^mcp-proxy/[0-9]+\.[0-9]+\.[0-9]+([0-9A-Za-z.+-]*)$`)
+	shape := regexp.MustCompile(`^claude-desktop-plugin/[0-9]+\.[0-9]+\.[0-9]+([0-9A-Za-z.+-]*)$`)
 	if !shape.MatchString(axonflowClientValue) {
-		t.Fatalf("axonflowClientValue %q does not match mcp-proxy/<semver>", axonflowClientValue)
+		t.Fatalf("axonflowClientValue %q does not match claude-desktop-plugin/<semver>", axonflowClientValue)
 	}
 }
