@@ -6,6 +6,42 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-05
+
+### Added
+- **The proxy now declares what it can enforce, and the platform refuses to
+  hand it an obligation it has said it cannot discharge** (ADR-065 capability
+  handshake; axonflow-enterprise#3763). On every governed call the proxy
+  presents `X-Axonflow-PEP-Handshake`, a short document naming this enforcement
+  point and the exact obligation types and schema versions it can carry out.
+  Where a platform running v10.4.0 or later attaches a mandatory obligation this
+  proxy has declared it cannot discharge, the request is **denied** rather than
+  allowed on the assumption that the proxy will handle it.
+
+  **OPT-IN, and off by default.** Set `AXONFLOW_PEP_AUDIENCE` to the audience
+  your decision proofs are bound to. Leave it unset and no header is sent and
+  nothing changes: the proxy behaves byte for byte as it did in 0.3.2 against
+  every platform version.
+
+  **The declaration is honest about your configuration, and that is the point.**
+  A `field_redact` obligation is discharged by calling the platform's
+  fulfillment endpoint (`/api/v1/mcp/check-output`) and forwarding the
+  engine-redacted content; ADR-056 forbids the proxy from redacting for itself.
+  So with `AXONFLOW_REDACT_RESPONSES` at its default `always`, or at
+  `on-obligation`, the proxy declares `field_redact@1`. With
+  `AXONFLOW_REDACT_RESPONSES=off` it never calls that endpoint, so it declares
+  **nothing** - and a platform that would have attached a mandatory redaction
+  now denies the request instead of allowing it in the belief that a redaction
+  was coming that never was. **If you run with response redaction off AND set an
+  audience, expect denials where you previously got allows.** That is the
+  intended behaviour and it is the reason the header is opt-in.
+
+  A malformed `AXONFLOW_PEP_AUDIENCE` makes the proxy **refuse to start**,
+  rather than quietly disabling the handshake and leaving an operator believing
+  a control is in force when it is not.
+
+  Older platforms ignore the header entirely and behave exactly as before.
+
 ### Changed
 - **Wire identity renamed — `X-Axonflow-Client` now sends `claude-desktop-plugin/<version>`, was `mcp-proxy/<version>`.** The old id named the binary and matched neither this repository nor the product, so AxonFlow-side distribution telemetry filed this extension under a name no dashboard, docs page or support conversation would look for. **0.3.2 is the last version that sends `mcp-proxy`.** The header is telemetry attribution only and is never used for authentication, so this changes nothing about how a request is authorised; the AxonFlow platform continues to accept the old id for one release so proxies already in the field are not dropped mid-upgrade. No configuration change is required.
 
