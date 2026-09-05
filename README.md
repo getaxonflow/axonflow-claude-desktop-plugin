@@ -100,6 +100,7 @@ environment variables (see `manifest.json`):
 | Tenant / Org | `AXONFLOW_TENANT_ID` / `AXONFLOW_ORG_ID` | |
 | Fail mode | `AXONFLOW_FAIL_MODE` | `closed` (default) or `open` — request plane only; response redaction is always fail-closed |
 | Response redaction | `AXONFLOW_REDACT_RESPONSES` | `always` (default) · `on-obligation` (legacy: only on a `redact_pii` obligation / fail-open forward) · `off` (explicit opt-out footgun — disables the whole response-governance call, i.e. PII redaction **and** response-side SQLi/exfil hard-blocks) |
+| Capability handshake | `AXONFLOW_PEP_AUDIENCE` | unset (default) sends no header and changes nothing · set to the audience your decision proofs are bound to, and the proxy declares what it can enforce on every governed call. See "Declaring what this proxy can enforce" below. A malformed value makes the proxy refuse to start. |
 | Leader email | `AXONFLOW_LEADER_EMAIL` | stamped on the proxy's local Layer-1 audit rows; asserted to the platform as `X-User-Email` — attributed into the platform audit trail only under the trust gate (see above) |
 | Backend servers file | `AXONFLOW_BACKENDS_FILE` | JSON map — see `config.example.json` |
 | Audit log path | `AXONFLOW_AUDIT_LOG` | optional JSONL sink |
@@ -163,6 +164,39 @@ set this in the install bundle's `.env` (`PII_ACTION=redact`) — see
 [`axonflow-install`](https://github.com/getaxonflow/axonflow-install).
 
 Two **separate** knobs — don't conflate them:
+
+### Declaring what this proxy can enforce (ADR-065 capability handshake)
+
+Set `AXONFLOW_PEP_AUDIENCE` and the proxy presents `X-Axonflow-PEP-Handshake` on
+every governed call: a short document naming this enforcement point and the
+exact obligation types and schema versions it can carry out. A platform running
+v10.4.0 or later that would attach a **mandatory** obligation this proxy has
+declared it cannot discharge **denies** the request instead of allowing it and
+assuming the proxy will cope.
+
+**It is opt-in and off by default.** Unset, no header is sent and the proxy
+behaves exactly as it did before, against every platform version. Older
+platforms ignore the header entirely.
+
+**The declaration follows your redaction setting, and this is the part to read
+before you enable it.** A `field_redact` obligation is discharged by calling the
+platform's fulfillment endpoint and forwarding the engine-redacted content; the
+proxy is not permitted to redact for itself (ADR-056).
+
+| `AXONFLOW_REDACT_RESPONSES` | The proxy declares | Effect on an Enterprise platform |
+|---|---|---|
+| `always` (default) | `field_redact@1` | unchanged: it can discharge a redaction, and does |
+| `on-obligation` | `field_redact@1` | unchanged |
+| `off` | nothing (`[]`) | a request carrying a mandatory redaction is **denied** |
+
+That last row is the whole point and it is a real behaviour change: a proxy
+configured never to redact was previously handed the obligation and allowed, and
+the redaction simply never happened. Declaring the truth turns that silent
+outcome into a visible denial. **If you run with `off` and set an audience,
+expect denials where you previously got allows.**
+
+On a Community platform nothing is denied either way; the declaration is
+recorded and counted so an operator can see the gap.
 
 - **`AXONFLOW_REDACT_RESPONSES`** (proxy, table above): controls *whether* the
   proxy **sends** each allowed response to `check-output` at all (`always`
