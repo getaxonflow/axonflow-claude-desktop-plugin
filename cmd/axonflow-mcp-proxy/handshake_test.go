@@ -237,3 +237,27 @@ func TestNoHeaderIsSentWhenUnconfigured(t *testing.T) {
 			"MALFORMED to the platform and refuses the request, which an absent header does not")
 	}
 }
+
+// TestTheAudiencePatternIsAnchoredToTheWholeString.
+//
+// The same grammar is hand-ported into five clients and the end anchor means
+// something different in each: Python's `$` also matches just BEFORE a trailing
+// newline (it accepted "aud\n" until it was anchored with \A/\Z), and shell's
+// grep is line-based (it accepted "aud\nhas spaces", putting a raw newline
+// inside a JSON string). Go's `$` is end-of-text without the `m` flag, so this
+// port is correct as written - but "correct as written" is exactly the claim
+// that goes stale when someone adds `(?m)` or switches to FindString, so it is
+// pinned rather than reasoned about.
+func TestTheAudiencePatternIsAnchoredToTheWholeString(t *testing.T) {
+	for _, bad := range []string{
+		"aud\n",           // trailing newline: the Python defect
+		"aud\nhas spaces", // embedded newline: the shell defect
+		"aud\r\n",         // CRLF
+		"\naud",           // leading newline
+	} {
+		if _, err := buildPEPHandshake(Config{PEPAudience: bad, RedactResponses: redactAlways}); err == nil {
+			t.Fatalf("audience %q was accepted; a multi-line value puts a raw newline inside a JSON "+
+				"string, which the platform refuses as a malformed handshake on every governed call", bad)
+		}
+	}
+}
