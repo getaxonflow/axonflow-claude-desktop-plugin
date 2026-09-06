@@ -168,6 +168,14 @@ func (d *DecideClient) Decide(ctx context.Context, req DecideRequest, traceparen
 	// sent: the value is a compile-time constant derived from proxyVersion, so
 	// there is no empty/omit branch and no second version copy to drift.
 	httpReq.Header.Set(axonflowClientHeader, axonflowClientValue)
+	// ADR-065 capability handshake (axonflow-enterprise#3763): what THIS
+	// enforcement point can discharge. Omitted entirely when no audience is
+	// configured, which is byte-for-byte the pre-handshake behaviour.
+	//
+	// Set from cfg rather than rebuilt here: one document, both call paths.
+	if d.cfg.PEPHandshake != "" {
+		httpReq.Header.Set(pepHandshakeHeader, d.cfg.PEPHandshake)
+	}
 	// Per-developer + per-session identity (#2753/#2754). The proxy already
 	// forwards LeaderEmail as the opaque x-leader-identity context key (kept for
 	// SIEM join continuity), which lands in policy_details JSONB regardless of

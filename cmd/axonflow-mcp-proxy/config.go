@@ -47,6 +47,44 @@ type Config struct {
 	// decide governance is unaffected by this setting.)
 	RedactResponses string // AXONFLOW_REDACT_RESPONSES=always|on-obligation|off (default always)
 
+	// PEPAudience opts this proxy into the ADR-065 capability handshake
+	// (axonflow-enterprise#3763) and is the audience a decision proof should be
+	// bound to.
+	//
+	// SET AS `AXONFLOW_PEP_AUDIENCE`. Both names are load bearing in different
+	// places: the environment variable is what an operator sets, the config
+	// field is what a reader of this code finds, and a brief naming only one
+	// sends the other party searching for a name that does not appear.
+	//
+	// EMPTY IS THE DEFAULT AND SENDS NO HEADER, which leaves the proxy behaving
+	// byte for byte as it did before the handshake existed. It is opt-in
+	// because on an ENTERPRISE deployment the transition it gates is
+	// ALLOW -> DENY: a proxy running with AXONFLOW_REDACT_RESPONSES=off
+	// honestly declares that it discharges nothing, and the platform then
+	// denies a request carrying a mandatory redaction instead of handing over
+	// content this proxy was never going to redact. That is the posture an
+	// operator almost certainly wants, and it is still a change in what callers
+	// see, so it is stated on a knob rather than discovered in production.
+	//
+	// On a COMMUNITY deployment nothing changes at all: the capability deny is
+	// physically absent from that build, so the declaration is read, bound and
+	// counted, and acted on by nothing.
+	//
+	// Same variable name and same semantics as the gateway adapters' knob,
+	// deliberately: one contract across the fleet, no per-client dialects.
+	PEPAudience string // AXONFLOW_PEP_AUDIENCE — empty → no handshake presented
+
+	// PEPHandshake is the ENCODED header value, DERIVED from PEPAudience and
+	// RedactResponses by buildPEPHandshake at the end of loadConfig. Empty when
+	// no audience is configured, and every call site omits the header then.
+	//
+	// Derived once and stored rather than built per request, and stored HERE
+	// rather than on each client, because the two governed call paths
+	// (decide.go, checkoutput.go) must present the SAME declaration: they are
+	// one enforcement point, and a document that differed between them would be
+	// a per-call-site dialect the platform would attribute to a single PEP.
+	PEPHandshake string
+
 	// Identity stamped onto every Layer-1 audit row + forwarded to the PDP in
 	// the decision context map (Layer-2 audit headers).
 	LeaderEmail string // AXONFLOW_LEADER_EMAIL — the Desktop user (empty → omitted)
@@ -183,6 +221,12 @@ func LoadConfig() (Config, error) {
 			cfg.RedactResponses, redactAlways, redactOnObligation, redactOff)
 	}
 
+	// ADR-065 capability handshake. Empty (the default) presents no header.
+	// The VALUE is validated in buildPEPHandshake, which is called at
+	// construction so a malformed audience refuses to start rather than
+	// 400-ing every governed call in production.
+	cfg.PEPAudience = envOr("AXONFLOW_PEP_AUDIENCE", "")
+
 	timeout, err := time.ParseDuration(envOr("AXONFLOW_DECIDE_TIMEOUT", "10s"))
 	if err != nil || timeout <= 0 {
 		return Config{}, fmt.Errorf("invalid AXONFLOW_DECIDE_TIMEOUT %q: %w", os.Getenv("AXONFLOW_DECIDE_TIMEOUT"), err)
@@ -221,6 +265,23 @@ func LoadConfig() (Config, error) {
 		seen[backends[i].ID] = true
 	}
 	cfg.Backends = backends
+
+	// ADR-065 capability handshake, rendered ONCE for the whole process.
+	//
+	// LAST, because it reads RedactResponses: what this proxy can honestly
+	// declare depends on whether it will call the fulfillment endpoint at all,
+	// and that is decided above. Building it earlier would declare a capability
+	// against a config value not yet resolved.
+	//
+	// A failure here REFUSES TO START. A malformed audience that quietly
+	// disabled the handshake would leave an operator believing a control was in
+	// force when it was not, which is worse than not starting.
+	handshake, err := buildPEPHandshake(cfg)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PEPHandshake = handshake
+
 	return cfg, nil
 }
 

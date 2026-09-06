@@ -159,6 +159,14 @@ func (c *CheckOutputClient) CheckOutput(ctx context.Context, message, traceparen
 	// Version identifier for per-client distribution telemetry (#2860) —
 	// telemetry-only, never auth; identical contract to the decide call.
 	httpReq.Header.Set(axonflowClientHeader, axonflowClientValue)
+	// ADR-065 capability handshake (axonflow-enterprise#3763): what THIS
+	// enforcement point can discharge. Omitted entirely when no audience is
+	// configured, which is byte-for-byte the pre-handshake behaviour.
+	//
+	// Set from cfg rather than rebuilt here: one document, both call paths.
+	if c.cfg.PEPHandshake != "" {
+		httpReq.Header.Set(pepHandshakeHeader, c.cfg.PEPHandshake)
+	}
 	// Per-developer + per-session identity (#2753/#2754), same as decide.go.
 	// ASSERTED, not authenticated: the platform attributes these headers to
 	// audit_logs.user_email / session_id ONLY when its agent is started with
