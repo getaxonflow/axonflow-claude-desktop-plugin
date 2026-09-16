@@ -69,8 +69,8 @@ COMPOSE_PROJECT=cd-live AXONFLOW_ENDPOINT=http://localhost:8080 KEEP_STACK=1 ./m
 `axonflow-enterprise` checkout, override with `AXONFLOW_BUNDLE_SQL`) **and** two
 harness-org-scoped rows (read-only write/DDL block + a `compliance-rbi`
 `require_approval` gate) so the read-only and needs_approval cases fire under the
-org/tenant the harness actually drives (`bukuwarung-eval`), which the bundle's
-`bukuwarung`-scoped rows never match. It also **neutralises the agent's anti-abuse
+org/tenant the harness actually drives (`AXONFLOW_ORG_ID`), which the bundle's
+org-scoped rows never match. It also **neutralises the agent's anti-abuse
 circuit breaker** for the test org (the matrix generates 9 denies per run, which
 would trip the per-client 5-violations-in-5-min breaker and turn later calls into
 fail-closed 503s). The breaker is an agent feature orthogonal to the proxy

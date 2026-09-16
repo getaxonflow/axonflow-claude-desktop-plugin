@@ -204,8 +204,8 @@ CASES = {
     114: ("deny_readonly_delete", "deny", None),
     115: ("deny_readonly_update", "deny", None),
     116: ("deny_readonly_insert", "deny", None),
-    # ---- NEEDS_APPROVAL (HITL gate) ----
-    117: ("needs_approval_wire", "needs_approval", None),
+    # ---- APPROVAL REQUIRED (v11: a deny whose reason starts approval_required) ----
+    117: ("approval_required_deny", "needs_approval", None),
 }
 
 # Tools whose execution-proof string must be ABSENT when a call is denied
@@ -306,7 +306,9 @@ representatives = [
     ("allow", first_audit(lambda r: r["tool_name"] == "export_ledger" and r["verdict"] == "allow"), "allow"),
     ("deny", first_audit(lambda r: r["tool_name"] == "run_sql_report" and r["verdict"] == "deny"), "deny"),
     ("redact", first_audit(lambda r: r["tool_name"] == "lookup_customer" and r.get("redaction_count", 0) > 0), "allow"),
-    ("needs_approval", first_audit(lambda r: r.get("verdict") == "needs_approval"), "needs_approval"),
+    # Case 117: on AxonFlow v11 decide has no hold, so the approval-requiring
+    # call is a deny, identified by the harness-seeded approval policy.
+    ("approval_required", first_audit(lambda r: r.get("verdict") == "deny" and any("shmatrix_require_approval" in p for p in (r.get("evaluated_policies") or []))), "deny"),
 ]
 for name, row, want in representatives:
     check(row is not None, f"[{name}] a proxy audit row with a decision_id exists")

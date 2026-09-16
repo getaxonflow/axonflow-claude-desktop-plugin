@@ -123,16 +123,17 @@ fi
 
 # --- 3a. seed policies scoped to the HARNESS's actual org/tenant ------------
 # The bundle above hard-codes org=bukuwarung + tenant=bukuwarung-{marketing,ops,
-# fintech}. This harness drives as org=$ORG / tenant=$ORG (the design partner's
-# eval org, bukuwarung-eval), so the bundle's tenant-scoped read-only rows never
+# fintech}. This harness drives as org=$ORG / tenant=$ORG (AXONFLOW_ORG_ID, which
+# the bundle's rows never name), so the bundle's tenant-scoped read-only rows never
 # fire here — the DELETE/UPDATE/INSERT cases would see a genuine PDP `allow` and
 # the proxy would (correctly) forward them. Seed the two verdict-shapes the
 # bundle can't provide for THIS org so cases 114-116 (read-only deny) and 117
-# (needs_approval) exercise a real PDP verdict rather than a vacuous pass:
+# (approval required) exercise a real PDP verdict rather than a vacuous pass:
 #   * read-only write/DDL block  → action=block          → verdict=deny (-32001)
 #   * require_approval            → category=compliance-rbi (NOT coerced by the
 #     detection ActionOverrides map, unlike sensitive-data/security/pii, which
-#     the /decide lever forces to block) → verdict=needs_approval (-32002)
+#     the /decide lever forces to block) → on AxonFlow v11 a deny whose reason
+#     starts approval_required (-32001); decide has no hold
 ok "seeding harness-org policies (org=$ORG, tenant=$ORG)"
 PSQL -c "INSERT INTO static_policies
   (policy_id, name, category, tier, pattern, severity, description, action, priority, enabled, tenant_id, org_id, created_by, phase, action_request, action_response)
