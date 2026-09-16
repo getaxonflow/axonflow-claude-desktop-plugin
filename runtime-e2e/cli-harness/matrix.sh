@@ -23,7 +23,8 @@
 #   deny:    DROP / UNION / OR-true / injection-override /          (system policies)
 #            injection-reveal / dangerous-command
 #   deny:    DELETE / UPDATE / INSERT                               (harness-org read-only block)
-#   needs_approval: wire_transfer -> compliance-rbi require_approval -> -32002 (HITL held)
+#   approval required: wire_transfer -> compliance-rbi require_approval -> on v11 a deny
+#            whose reason starts approval_required -> -32001 (decide has no hold)
 #   fail-closed: PDP unreachable -> -32003
 #   tenant-isolation: foreign tenant -> PDP 403 -> blocked
 # Every case is also run through the UNIVERSAL PII-leak detector (matrix_assert.py).
@@ -34,7 +35,8 @@
 # AXONFLOW_BUNDLE_SQL.
 #
 # Usage:
-#   export AXONFLOW_LICENSE_KEY="$(cat bukuwarung.license)"
+#   export AXONFLOW_LICENSE_KEY="$(cat /path/to/enterprise.license)"
+#   export AXONFLOW_ORG_ID=<the licence's org id> AXONFLOW_LEADER_EMAIL=<a test address>
 #   ./matrix.sh                       # brings the stack up, runs, tears it down
 #   KEEP_STACK=1 ./matrix.sh          # leave the stack up
 #   COMPOSE_PROJECT=cd-live AXONFLOW_ENDPOINT=http://localhost:8080 ./matrix.sh  # reuse a running stack
@@ -44,8 +46,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 COMPOSE="$HERE/docker-compose.yml"
 PROJECT="${COMPOSE_PROJECT:-sh-e2e-matrix}"
-ORG="${AXONFLOW_ORG_ID:-bukuwarung-eval}"
-LEADER="${AXONFLOW_LEADER_EMAIL:-ben.jonathan@bukuwarung.test}"
+ORG="${AXONFLOW_ORG_ID:?set AXONFLOW_ORG_ID to the org id of the Enterprise licence}"
+# The compose file's agent ORG_ID must be the same org, so it is passed through.
+export HARNESS_ORG="$ORG"
+LEADER="${AXONFLOW_LEADER_EMAIL:?set AXONFLOW_LEADER_EMAIL}"
 ENDPOINT="${AXONFLOW_ENDPOINT:-http://localhost:8080}"
 FOREIGN_TENANT="${FOREIGN_TENANT:-acme-corp}"
 BUNDLE_SQL="${AXONFLOW_BUNDLE_SQL:-$ROOT/../axonflow-enterprise/config/seed-data/bukuwarung/bukuwarung_policy_bundle.sql}"

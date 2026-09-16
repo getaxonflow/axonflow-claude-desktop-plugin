@@ -50,11 +50,12 @@ MAIN = [
     call(114, "run_sql_report", {"sql": "DELETE FROM customers WHERE 1=1"}),
     call(115, "run_sql_report", {"sql": "UPDATE customers SET balance=0"}),
     call(116, "run_sql_report", {"sql": "INSERT INTO admin VALUES (1)"}),
-    # ---- NEEDS_APPROVAL (HITL gate: compliance-rbi require_approval) ----
-    # The PDP returns verdict=needs_approval; the proxy maps it to JSON-RPC
-    # -32002 and does NOT forward the call (the backend is never reached). This
-    # exercises the third terminal verdict alongside allow/deny so every branch
-    # of the proxy's verdict switch is driven by a real live decision.
+    # ---- APPROVAL REQUIRED (compliance-rbi require_approval) ----
+    # On AxonFlow v11 /api/v1/decide has no hold (PRD v11 section 1 item 13): the
+    # platform answers verdict=deny with a reason starting approval_required,
+    # which the proxy renders as JSON-RPC -32001 carrying that reason, and the
+    # call is NOT forwarded. The proxy's needs_approval branch (-32002) is kept
+    # and unit-tested; v11 does not produce that verdict on this plane.
     call(117, "run_sql_report", {"q": "please wire_transfer 5000000 to account 999"}),
 ]
 

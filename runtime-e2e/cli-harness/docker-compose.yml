@@ -18,7 +18,7 @@
 #     -t axonflow-agent:sh-e2e .
 #
 #   AXONFLOW_AGENT_IMAGE=axonflow-agent:sh-e2e \
-#   AXONFLOW_LICENSE_KEY="$(cat bukuwarung.license)" \
+#   AXONFLOW_LICENSE_KEY="$(cat /path/to/enterprise.license)" HARNESS_ORG=<the licence's org id> \
 #   docker compose -f runtime-e2e/cli-harness/docker-compose.yml up -d
 #
 # Usage:  docker compose up -d  →  ../run.sh (or ./run.sh)  →  docker compose down -v
@@ -51,9 +51,10 @@ services:
       # run.sh enforces that this is set (and that /health reports Enterprise);
       # the default is empty so `docker compose down` works without the env.
       AXONFLOW_LICENSE_KEY: ${AXONFLOW_LICENSE_KEY:-}
-      # Must match the issued partner license's org_id (bukuwarung-eval), else
-      # the agent refuses to boot on an org mismatch. Override with HARNESS_ORG.
-      ORG_ID: ${HARNESS_ORG:-bukuwarung-eval}
+      # Must match the licence's org_id, else the agent refuses to boot on an org
+      # mismatch. Set HARNESS_ORG; the empty default only lets `docker compose
+      # down` run without the environment, like AXONFLOW_LICENSE_KEY above.
+      ORG_ID: ${HARNESS_ORG:-}
       AXONFLOW_DB_USE_APP_ROLE: "false"
       AXONFLOW_PROFILE: strict
       SQLI_ACTION: block

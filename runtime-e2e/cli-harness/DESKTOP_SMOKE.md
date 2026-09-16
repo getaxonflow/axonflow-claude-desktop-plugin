@@ -19,7 +19,7 @@ Two layers of evidence:
    rm -rf /tmp/cdp-ext && unzip -q build/axonflow-governance-*.mcpb -d /tmp/cdp-ext
 
    cd runtime-e2e/cli-harness
-   export AXONFLOW_LICENSE_KEY="$(cat /path/to/bukuwarung.license)"
+   export AXONFLOW_LICENSE_KEY="$(cat /path/to/enterprise.license)"
    export AXONFLOW_AGENT_IMAGE=axonflow-agent:sh-e2e   # enterprise build >= #2526
    PROXY_BIN=/tmp/cdp-ext/server/axonflow-mcp-proxy-darwin \
      BACKENDS_MODE=file ./run.sh
@@ -50,10 +50,10 @@ Two layers of evidence:
    `build/axonflow-governance-<version>.mcpb`. ★ install dialog
 3. Fill the configuration form (these map to the manifest `user_config`):
    - **AxonFlow endpoint:** `http://localhost:8080`
-   - **Client ID:** `bukuwarung`  *(must equal the license org)*
+   - **Client ID:** `<the licence's org id>`  *(must equal the license org)*
    - **Client secret:** the Enterprise license key
-   - **Tenant ID / Org ID:** `bukuwarung`
-   - **Leader email:** `ben.jonathan@bukuwarung.test`
+   - **Tenant ID / Org ID:** `<the licence's org id>`
+   - **Leader email:** `<a test address>`
    - **Fail mode:** `closed`
    - **Backend MCP servers (config file):** `/tmp/cdp-backends.json`
    - **Audit log path:** `/tmp/cdp-desktop-audit.jsonl`

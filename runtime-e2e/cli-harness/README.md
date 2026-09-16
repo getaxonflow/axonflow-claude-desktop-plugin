@@ -28,7 +28,7 @@ Code** (the client) received, the **proxy's Layer-1 audit JSONL**, and the
 | **allow** | benign `export_ledger` forwarded; 3 records; DB row `allow` + `gateway_id=claude_desktop.*` + leader |
 | **deny** | `run_sql_report` with a stacked `DROP TABLE` → JSON-RPC `-32001`; backend never reached; SQLi drop policy in both proxy + DB |
 | **redact** | `lookup_customer` with a **clean `customer_id`** (NO PII in the request) → `allow` with **NO** `redact_pii` obligation; the response's NIK / email / phone **and the NIK-keyed `related_accounts` KEY** come back `[REDACTED:*]` anyway. This is the **#2530 regression case**: the old proxy gated redaction on the obligation, so this exact clean-request call leaked PII into Claude's context. The fixed proxy scans every response unconditionally. |
-| **needs_approval** | `run_sql_report` with a `wire_transfer` string matching a `compliance-rbi` `require_approval` policy → JSON-RPC `-32002`; the call is held for HITL and the backend is never reached |
+| **approval required** | `run_sql_report` with a `wire_transfer` string matching a `compliance-rbi` `require_approval` policy → on AxonFlow v11 `/api/v1/decide` has no hold, so the platform answers a **deny** whose reason starts `approval_required` → JSON-RPC `-32001` with that reason; the backend is never reached. (The proxy still maps a `needs_approval` verdict to `-32002` if a platform sends one; v11 does not on this plane.) |
 | **fail-closed** | PDP unreachable → JSON-RPC `-32003`, blocked |
 
 A **universal PII-leak detector** runs on **every** case's response-to-Claude (not just the redact one) — a leak in a case that wasn't looking is exactly how the §4.3 hole hid.
@@ -51,7 +51,7 @@ foreign tenant id on demand; this harness can.
 - **request-only PII**: `export_ledger(aadhaar arg)` — obligation fires, response is clean, no false redaction
 - **deny (system policies)**: DROP, UNION, OR-true, injection-override, injection-reveal, dangerous-command
 - **deny (read-only block)**: DELETE, UPDATE, INSERT — blocked by the harness-org read-only write/DDL policy (`matrix.sh` seeds it scoped to the org/tenant the harness actually drives; the BukuWarung bundle's rows are scoped to `bukuwarung`/`bukuwarung-{marketing,ops,fintech}`, which the eval org never matches)
-- **needs_approval**: `wire_transfer` → a `compliance-rbi` `require_approval` policy → `-32002`, held for HITL, backend untouched
+- **approval required**: `wire_transfer` → a `compliance-rbi` `require_approval` policy → on v11 a deny with `approval_required` → `-32001`, backend untouched
 - **fail-closed**: dead PDP → `-32003`
 - **tenant-isolation**: a foreign tenant id → PDP `403` (tenant mismatch) → blocked, backend untouched
 - **negative control**: the clean-request lookup driven with the legacy
@@ -59,7 +59,8 @@ foreign tenant id on demand; this harness can.
   universal detector is not vacuous *and* reproducing the old bug.
 
 ```bash
-export AXONFLOW_LICENSE_KEY="$(cat bukuwarung.license)"
+export AXONFLOW_LICENSE_KEY="$(cat /path/to/enterprise.license)"
+export AXONFLOW_ORG_ID=<the licence's org id> AXONFLOW_LEADER_EMAIL=<a test address>
 ./matrix.sh                                            # builds, boots/reuses stack, seeds bundle, asserts
 COMPOSE_PROJECT=cd-live AXONFLOW_ENDPOINT=http://localhost:8080 KEEP_STACK=1 ./matrix.sh  # reuse a running stack
 ```
@@ -81,11 +82,12 @@ and clears stale circuit state — it never weakens a governance verdict.
 ```bash
 # Build an EDITION=enterprise agent image at/after #2526 from the axonflow-enterprise repo:
 #   docker build -f platform/agent/Dockerfile --build-arg EDITION=enterprise -t axonflow-agent:sh-e2e .
-# Generate an Enterprise license (org must match AXONFLOW_ORG_ID, default "bukuwarung"):
-#   AXONFLOW_ENT_SIGNING_KEY=... keygen -tier Enterprise -org bukuwarung -days 365 -quiet > bukuwarung.license
+# Generate an Enterprise license (org must match AXONFLOW_ORG_ID, which has no default):
+#   AXONFLOW_ENT_SIGNING_KEY=... keygen -tier Enterprise -org <org id> -days 365 -quiet > enterprise.license
 
 export AXONFLOW_AGENT_IMAGE=axonflow-agent:sh-e2e
-export AXONFLOW_LICENSE_KEY="$(cat bukuwarung.license)"
+export AXONFLOW_LICENSE_KEY="$(cat /path/to/enterprise.license)"
+export AXONFLOW_ORG_ID=<the licence's org id> AXONFLOW_LEADER_EMAIL=<a test address>
 ./run.sh                 # builds, boots the stack, drives Claude Code, asserts, tears down
 KEEP_STACK=1 ./run.sh    # leave the stack up for inspection
 ```

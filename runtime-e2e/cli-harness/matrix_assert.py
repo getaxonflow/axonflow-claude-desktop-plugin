@@ -247,11 +247,18 @@ for cid, (label, want_verdict, cell) in CASES.items():
         check(not reached, f"[{label}] backend never executed (no exec marker)"
               + ("" if not reached else f" — LEAKED markers {reached}"))
     elif want_verdict == "needs_approval":
-        code = o.get("error", {}).get("code")
-        check(code == -32002, f"[{label}] held for approval with -32002 (got {code})")
-        # a call held for HITL approval must NOT have been forwarded.
+        # AxonFlow v11 decide has no hold: an approval-requiring call is a DENY
+        # whose reason starts approval_required, rendered as -32001 with that
+        # reason in the message. Asserting the reason, not only the code, so a
+        # different deny cannot pass this case.
+        err = o.get("error", {})
+        code = err.get("code")
+        msg = err.get("message", "")
+        check(code == -32001, f"[{label}] refused with -32001 (got {code})")
+        check(msg.startswith("approval_required"), f"[{label}] reason starts approval_required (got {msg[:120]!r})")
+        # a refused call must NOT have been forwarded.
         reached = [m for m in BACKEND_EXEC_MARKERS if m in body]
-        check(not reached, f"[{label}] backend never executed (approval-held)"
+        check(not reached, f"[{label}] backend never executed (approval required)"
               + ("" if not reached else f" — LEAKED markers {reached}"))
 
 # ---- audit cross-check ----------------------------------------------------
