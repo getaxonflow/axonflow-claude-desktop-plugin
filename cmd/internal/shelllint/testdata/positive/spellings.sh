@@ -22,3 +22,15 @@ cmd |                                       # EXPECT
 echo "$(cmd | grep -L two)"                 # EXPECT
 cmd |                                       # EXPECT
   sort | grep -q two
+cmd | \grep -q two                          # EXPECT
+cmd | /usr/bin/grep -q two                  # EXPECT
+echo 'x' \| grep -q x || true
+cmd | timeout 5 grep -q two                 # EXPECT
+cmd | timeout -s KILL 5 grep -q two         # EXPECT
+cmd | nice -n 10 grep -q two                # EXPECT
+cmd | env -u FOO grep -q two                # EXPECT
+cmd | sudo -u nobody grep -q two            # EXPECT
+cmd | { grep -q two; }                      # EXPECT
+cmd | (grep -q two)                         # EXPECT
+cmd | xargs -0 printf '%s' | wc -l
+cmd | xargs grep -ql two

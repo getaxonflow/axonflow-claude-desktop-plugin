@@ -52,8 +52,11 @@ type codeChar struct {
 }
 
 var (
-	heredocRe  = regexp.MustCompile(`^<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)(['"]?)`)
-	pipefailRe = regexp.MustCompile(`(^|\s)set\s+(-[A-Za-z]*\s+)*(-[A-Za-z]*o\s+pipefail|-o\s+pipefail)\b`)
+	heredocRe = regexp.MustCompile(`^<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)(['"]?)`)
+	// `set` followed, anywhere in the same statement, by `-o pipefail` or a
+	// short-option cluster ending in o and then pipefail: `set -euo pipefail`,
+	// `set -o errexit -o pipefail`, `set -e -o pipefail`.
+	pipefailRe = regexp.MustCompile(`(^|\s)set\s+(\S+\s+)*-[A-Za-z]*o\s+pipefail\b`)
 	// A `source` or `.` at the start of a statement, and the *.sh name the rest
 	// of that line ends in: `. "$(dirname "$0")/helpers.sh"` names helpers.sh.
 	sourceRe   = regexp.MustCompile(`(?m)(?:^|[;&|]|\bthen|\bdo|\belse)[ \t]*(?:source|\.)[ \t]+[^;&|\n]*?([A-Za-z0-9_.-]+\.sh)\b`)
@@ -116,7 +119,14 @@ func codeOf(src string) []codeChar {
 				continue
 			}
 			if top() != "dquote" {
-				out = append(out, codeChar{' ', line}, codeChar{' ', line})
+				// An escaped word character stays part of its word (`\grep` is
+				// grep); an escaped metacharacter (`\|`) is not syntax, so it is
+				// blanked.
+				if next := src[i+1]; strings.IndexByte("|&;()<>'\"`$# \t\\", next) < 0 {
+					out = append(out, codeChar{'\\', line}, codeChar{next, line})
+				} else {
+					out = append(out, codeChar{' ', line}, codeChar{' ', line})
+				}
 			}
 			i += 2
 			continue
@@ -199,18 +209,71 @@ func setsPipefail(src string) bool {
 	return false
 }
 
+// commandWrapper describes a command that runs the command after it with the
+// same stdin, so `timeout 5 grep -q` is a grep reading the pipe: takes is how
+// many leading non-option words the wrapper itself takes (timeout's duration),
+// and valueOpts are its options whose value is the NEXT word (`nice -n 10`).
+// xargs is deliberately absent: it reads the pipe itself and runs grep on the
+// file names it collects, so an early grep exit does not signal the producer.
+type commandWrapper struct {
+	takes     int
+	valueOpts []string
+}
+
+var commandWrappers = map[string]commandWrapper{
+	"command": {}, "exec": {}, "nohup": {}, "time": {},
+	"env":     {valueOpts: []string{"-u", "-C", "-S"}},
+	"nice":    {valueOpts: []string{"-n"}},
+	"stdbuf":  {valueOpts: []string{"-i", "-o", "-e"}},
+	"sudo":    {valueOpts: []string{"-u", "-g", "-C", "-h", "-p"}},
+	"timeout": {takes: 1, valueOpts: []string{"-s", "-k"}},
+}
+
 func isEarlyExitGrep(words []string) bool {
 	k := 0
-	for k < len(words) && assignRe.MatchString(words[k]) {
-		k++
+	for k < len(words) {
+		w := strings.TrimLeft(words[k], "({!")
+		switch {
+		case w == "":
+			k++ // `{`, `(`, `!` on their own
+			continue
+		case assignRe.MatchString(w):
+			k++
+			continue
+		}
+		name := strings.TrimPrefix(w, "\\")
+		if i := strings.LastIndexByte(name, '/'); i >= 0 {
+			name = name[i+1:]
+		}
+		if wrapper, ok := commandWrappers[name]; ok {
+			k++
+			// the wrapper's own options (and the value of one that takes the
+			// next word), then the words it takes itself
+			for k < len(words) && strings.HasPrefix(words[k], "-") {
+				takesValue := false
+				for _, opt := range wrapper.valueOpts {
+					if words[k] == opt {
+						takesValue = true
+					}
+				}
+				k++
+				if takesValue {
+					k++
+				}
+			}
+			k += wrapper.takes
+			continue
+		}
+		if !greps[name] {
+			return false
+		}
+		break
 	}
-	if k < len(words) && words[k] == "command" {
-		k++
-	}
-	if k >= len(words) || !greps[words[k]] {
+	if k >= len(words) {
 		return false
 	}
 	for _, w := range words[k+1:] {
+		w = strings.TrimRight(w, ";})")
 		if w == "--" {
 			break
 		}
@@ -281,6 +344,10 @@ func findingLines(src string) []int {
 // Scan scans every .sh file under the given paths.
 func Scan(paths ...string) (Result, error) {
 	var files []string
+	// rel is each file's path below the scan root it was found under, so the
+	// lib/ scope reads only directories inside the scan, never the clone's own
+	// location on disk.
+	rel := map[string]string{}
 	for _, p := range paths {
 		err := filepath.WalkDir(p, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
@@ -291,6 +358,9 @@ func Scan(paths ...string) (Result, error) {
 			}
 			if !d.IsDir() && strings.HasSuffix(path, ".sh") {
 				files = append(files, path)
+				if r, relErr := filepath.Rel(p, path); relErr == nil {
+					rel[path] = r
+				}
 			}
 			return nil
 		})
@@ -314,7 +384,7 @@ func Scan(paths ...string) (Result, error) {
 	res := Result{Files: files}
 	for _, f := range files {
 		inLib := false
-		for _, part := range strings.Split(filepath.ToSlash(f), "/") {
+		for _, part := range strings.Split(filepath.ToSlash(filepath.Dir(rel[f])), "/") {
 			if part == "lib" || part == "_lib" {
 				inLib = true
 			}

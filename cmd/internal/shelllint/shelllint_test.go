@@ -75,8 +75,9 @@ func TestControls(t *testing.T) {
 	}{
 		{"suite", 1, nil},
 		{"no-pipefail", 0, nil},
-		{"lib", 1, []string{"helper.sh:6"}},
+		{"lib-scope", 1, []string{"helper.sh:6"}},
 		{"sourced", 2, []string{"helpers.sh:5"}},
+		{"errexit-spelling", 1, []string{"long_options.sh:4"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.dir, func(t *testing.T) {
@@ -152,5 +153,24 @@ func TestRepositoryShellHasNoGrepQUnderPipefail(t *testing.T) {
 	}
 	for _, f := range res.Findings {
 		t.Errorf("%s:%d: %s", f.File, f.Line, f.Text)
+	}
+}
+
+// A scan root that itself sits under a lib/ directory does not put its
+// scripts in scope: only directories inside the scan count.
+func TestLibScopeIsRelativeToTheScanRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "lib", "checkout")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "plain.sh"), []byte("#!/bin/sh\nprintf a | grep -q a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.InScope) != 0 {
+		t.Fatalf("a script outside any lib/ under the scan root is in scope: %v", res.InScope)
 	}
 }
