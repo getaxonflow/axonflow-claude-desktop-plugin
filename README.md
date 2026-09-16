@@ -53,7 +53,7 @@ extension.
 | **approval required** | on AxonFlow v11, `/api/v1/decide` has no hold: a call that needs approval is refused as a **deny** whose reason starts `approval_required` (`-32001`). The proxy still handles the verdict `needs_approval` if a platform sends it: refused with `-32002` `tool call refused pending approval: <reasons>`, not forwarded |
 | **response redaction** | every allowed backend response is sent to AxonFlow's authoritative engine (`POST /api/v1/mcp/check-output`) and PII is masked before it reaches Claude's context — the cross-border-data control. Coverage tracks the platform's detectors (NIK + SSN + email + phone …); the proxy never re-implements redaction locally. |
 | **response blocked** | if the engine hard-blocks a response (critical-PII deny, response SQLi, exfiltration), the call is denied (`-32001`) and the response is never forwarded |
-| **policy service refused the request** (any 4xx from decide or check-output) | always `-32003`, never forwarded, under either fail mode; the message names the cause and quotes the platform (see **When a call is refused** below). A decide error body says `verdict: deny` on every 4xx; that is a fail-closed envelope, not a policy decision, so it is never shown as a `-32001` deny |
+| **policy service refused the request** (any 4xx from decide, and any check-output 4xx except a block) | always `-32003`, never forwarded, under either fail mode; the message names the cause and quotes the platform (see **When a call is refused** below). A decide error body says `verdict: deny` on every 4xx; that is a fail-closed envelope, not a policy decision, so it is never shown as a `-32001` deny |
 | **PDP / engine unreachable** | **fail-closed by default** (`-32003`): the call is blocked. The response plane is *unconditionally* fail-closed — if the redaction engine is unreachable the (already-executed) response is **not** forwarded, even under fail-open. Opt into request-plane fail-open only with eyes open. |
 
 Every call writes one **Layer-1 audit row** (`session_id`, `leader_email`,
@@ -151,6 +151,7 @@ text, so read it before changing credentials:
 | 401 | `policy service rejected the proxy's credentials (HTTP 401): ...` | `AXONFLOW_CLIENT_ID`, `AXONFLOW_CLIENT_SECRET`, and an expired or revoked `AXONFLOW_USER_TOKEN` |
 | 402 | `policy service refused the request: a tier limit of this deployment was reached (HTTP 402): ...` | the deployment's licence tier (for example the service-principal limit); not a credential problem |
 | 429 | `policy service refused the request: a rate limit was reached (HTTP 429, limit_type "...", resets at ..., retry after N s): ...` | a quota or rate limit; each detail appears only when the platform sends it. Not a credential problem |
+| 404, 405 | `policy service rejected the request (HTTP <status>): .... Check AXONFLOW_ENDPOINT: ...` | `AXONFLOW_ENDPOINT` points at something that is not an AxonFlow agent serving this route, or at a platform too old for it |
 | other 4xx | `policy service rejected the request (HTTP <status>): ...` | the quoted text (for example a 403 `caller_identity.org_id does not match authenticated identity`: `AXONFLOW_ORG_ID` does not match the credential) |
 
 The same refusals from response governance (`/api/v1/mcp/check-output`) start

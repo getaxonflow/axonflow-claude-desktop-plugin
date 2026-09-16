@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -33,13 +34,15 @@ func refusalMessage(subject string, ce *clientError) string {
 	limit := limitSuffix(limitType, resetsAt, ce.RetryAfter)
 	switch {
 	case ce.StatusCode == 401:
-		return fmt.Sprintf("%s rejected the proxy's credentials (HTTP 401): %s. Check AXONFLOW_CLIENT_ID, AXONFLOW_CLIENT_SECRET and AXONFLOW_USER_TOKEN", subject, said)
+		return fmt.Sprintf("%s rejected the proxy's credentials (HTTP 401): %s. Check AXONFLOW_CLIENT_ID, AXONFLOW_CLIENT_SECRET and AXONFLOW_USER_TOKEN", subject, strings.TrimRight(said, "."))
 	case ce.StatusCode == 402:
 		return fmt.Sprintf("%s refused the request: a tier limit of this deployment was reached (HTTP 402%s): %s", subject, limit, said)
 	case ce.StatusCode == 429:
 		return fmt.Sprintf("%s refused the request: a rate limit was reached (HTTP 429%s): %s", subject, limit, said)
 	case limitType != "":
 		return fmt.Sprintf("%s refused the request: a tier limit was reached (HTTP %d%s): %s", subject, ce.StatusCode, limit, said)
+	case ce.StatusCode == 404 || ce.StatusCode == 405:
+		return fmt.Sprintf("%s rejected the request (HTTP %d): %s. Check AXONFLOW_ENDPOINT: it may not point at an AxonFlow agent that serves this route", subject, ce.StatusCode, strings.TrimRight(said, "."))
 	default:
 		return fmt.Sprintf("%s rejected the request (HTTP %d): %s", subject, ce.StatusCode, said)
 	}
@@ -65,7 +68,9 @@ func platformErrorText(body string) (text, limitType, resetsAt string) {
 			text = jsonString(parsed["error"])
 		case json.Unmarshal(parsed["error"], &asObject) == nil && jsonIsString(asObject["message"]):
 			text = jsonString(asObject["message"])
-			if code := strings.Trim(string(asObject["code"]), `"`); code != "" && code != "null" {
+			// A string code (ERR_...) is kept; a numeric one repeats the HTTP
+			// status the message already names.
+			if code := jsonString(asObject["code"]); code != "" {
 				text = code + ": " + text
 			}
 		case jsonIsString(parsed["message"]):
@@ -133,14 +138,15 @@ func isAllDigits(s string) bool {
 	return s != ""
 }
 
-// cleanRefusalText makes platform text safe for a one-line message: ASCII
-// control characters become spaces, runs of spaces collapse, and the result is
-// capped at maxRefusalTextRunes runes.
+// cleanRefusalText makes platform text safe for a one-line message: control
+// characters (C0, DEL, C1), format characters (bidi overrides, zero-width
+// characters) and line and paragraph separators become spaces, runs of spaces
+// collapse, and the result is capped at maxRefusalTextRunes runes.
 func cleanRefusalText(s string) string {
 	var b strings.Builder
 	lastSpace := false
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f || r == ' ' {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' || r == ' ' {
 			if !lastSpace {
 				b.WriteByte(' ')
 			}
@@ -159,18 +165,19 @@ func cleanRefusalText(s string) string {
 }
 
 // denyReason renders a deny's reasons for the JSON-RPC message: every reason,
-// in the platform's order, joined with "; ". The machine code the platform
-// sends first (e.g. unknown_constraint) stays first, so a script matching on it
-// still matches; the sentence after it is what a person needs to read.
+// in the platform's order, joined with "; ", cleaned and capped like refusal
+// text. The machine code the platform sends first (e.g. unknown_constraint)
+// stays first, so a script matching on it still matches; the sentence after it
+// is what a person needs to read. data.reasons keeps them verbatim.
 func denyReason(reasons []string, fallback string) string {
 	var kept []string
 	for _, r := range reasons {
-		if r = strings.TrimSpace(r); r != "" {
+		if r = cleanRefusalText(r); r != "" {
 			kept = append(kept, r)
 		}
 	}
 	if len(kept) == 0 {
 		return fallback
 	}
-	return strings.Join(kept, "; ")
+	return cleanRefusalText(strings.Join(kept, "; "))
 }

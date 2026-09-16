@@ -246,12 +246,6 @@ func asClientError(err error) (*clientError, bool) {
 	return nil, false
 }
 
-// isClientError reports whether err is a non-retryable 4xx from the PDP.
-func isClientError(err error) bool {
-	var ce *clientError
-	return errors.As(err, &ce)
-}
-
 // buildDecideQuery renders a tool call into the free-text query the PDP's
 // policy engine scans. Mirrors the reference adapter's buildQuery so a policy
 // authored against the adapter fires identically through the proxy.

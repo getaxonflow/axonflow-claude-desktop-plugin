@@ -134,7 +134,7 @@ func TestCheckOutput_401_IsClientError(t *testing.T) {
 	s.status = http.StatusUnauthorized
 	s.rawBody = `{"error":"unauthorized"}`
 	_, err := coClient(s.server.URL).CheckOutput(context.Background(), "x", "")
-	if !isClientError(err) {
+	if _, ok := asClientError(err); !ok {
 		t.Fatalf("401 should be a clientError, got %v", err)
 	}
 	// And NOT an output block (a 4xx auth failure is misconfig, not a policy block).
@@ -152,7 +152,7 @@ func TestCheckOutput_500_IsError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("500 must error (fail closed)")
 	}
-	if isClientError(err) {
+	if _, ok := asClientError(err); ok {
 		t.Fatalf("500 is not a client error")
 	}
 	if _, ok := asOutputBlocked(err); ok {
