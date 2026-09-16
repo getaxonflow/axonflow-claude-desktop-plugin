@@ -98,9 +98,13 @@ func (r DecideResponse) hasObligation(t string) bool {
 // errors — a 4xx means the proxy is misconfigured (bad credentials, bad
 // request), not that the PDP is degraded, so forwarding anyway would be
 // silently ungoverned. Mirrors the reference adapter's clientError.
+//
+// The status, the body and Retry-After are kept so refusalMessage can say
+// which refusal it was; the body is never decoded as a verdict here.
 type clientError struct {
 	StatusCode int
 	Body       string
+	RetryAfter string
 }
 
 func (e *clientError) Error() string {
@@ -212,7 +216,7 @@ func (d *DecideClient) Decide(ctx context.Context, req DecideRequest, traceparen
 	}
 
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-		return nil, resp.StatusCode, &clientError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		return nil, resp.StatusCode, &clientError{StatusCode: resp.StatusCode, Body: string(respBody), RetryAfter: resp.Header.Get("Retry-After")}
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusServiceUnavailable {
 		return nil, resp.StatusCode, fmt.Errorf("decide returned %d: %s", resp.StatusCode, string(respBody))
@@ -230,6 +234,16 @@ func (d *DecideClient) Decide(ctx context.Context, req DecideRequest, traceparen
 // the agent's extractClientID/extractClientSecret, which split on the first ":".
 func basicAuth(clientID, clientSecret string) string {
 	return base64.StdEncoding.EncodeToString([]byte(clientID + ":" + clientSecret))
+}
+
+// asClientError reports whether err is (or wraps) a 4xx from the policy
+// service, and returns it.
+func asClientError(err error) (*clientError, bool) {
+	var ce *clientError
+	if errors.As(err, &ce) {
+		return ce, true
+	}
+	return nil, false
 }
 
 // isClientError reports whether err is a non-retryable 4xx from the PDP.
