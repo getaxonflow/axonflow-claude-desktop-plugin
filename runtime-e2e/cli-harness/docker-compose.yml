@@ -1,6 +1,7 @@
 # CLI-harness stack — a LIVE in-vpc-enterprise AxonFlow agent (Decision Mode).
 #
-# This is the deployment mode BukuWarung actually runs (in-vpc-enterprise), so the
+# This is the deployment mode a self-hosted Enterprise customer runs
+# (in-vpc-enterprise), so the
 # proxy is exercised exactly as a real customer would: the PDP requires a valid
 # Enterprise license AND HTTP Basic auth on every /api/v1/decide call (unlike the
 # community agent in ../docker-compose.yml, which needs no auth).
@@ -42,7 +43,7 @@ services:
     environment:
       DATABASE_URL: postgres://axonflow:localdev123@postgres:5432/axonflow?sslmode=disable
       AXONFLOW_EDITION: enterprise
-      # BukuWarung's actual deployment mode (NOT "enterprise" — that defaults to
+      # The self-hosted Enterprise deployment mode (NOT "enterprise" — that defaults to
       # saas + loads every industry migration; in-vpc-enterprise loads the
       # Indonesia OJK/UU-PDP/BI migrations relocated to enterprise/ in v8.5.0).
       DEPLOYMENT_MODE: in-vpc-enterprise

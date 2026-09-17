@@ -7,17 +7,17 @@
     {
       "id": "crm",
       "command": "node",
-      "args": ["/Users/you/bukuwarung/crm-mcp/server.js"],
+      "args": ["/Users/you/example/crm-mcp/server.js"],
       "env": {
         "CRM_API_TOKEN": "..."
       }
     },
     {
-      "id": "panacea",
+      "id": "example-crm",
       "command": "python3",
-      "args": ["-m", "panacea_mcp"],
+      "args": ["-m", "example_crm_mcp"],
       "env": {
-        "PANACEA_BASE_URL": "https://panacea.internal.bukuwarung"
+        "EXAMPLE_BASE_URL": "https://crm.example.internal"
       }
     },
     {

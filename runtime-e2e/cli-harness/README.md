@@ -50,7 +50,7 @@ foreign tenant id on demand; this harness can.
 - **redact, both**: `lookup_customer(customer_id + aadhaar)`
 - **request-only PII**: `export_ledger(aadhaar arg)` — obligation fires, response is clean, no false redaction
 - **deny (system policies)**: DROP, UNION, OR-true, injection-override, injection-reveal, dangerous-command
-- **deny (read-only block)**: DELETE, UPDATE, INSERT — blocked by the harness-org read-only write/DDL policy (`matrix.sh` seeds it scoped to the org/tenant the harness actually drives; the BukuWarung bundle's rows are scoped to `bukuwarung`/`bukuwarung-{marketing,ops,fintech}`, which the eval org never matches)
+- **deny (read-only block)**: DELETE, UPDATE, INSERT — blocked by the harness-org read-only write/DDL policy (`matrix.sh` seeds it scoped to the org/tenant the harness actually drives; the policy bundle's own rows are scoped to its own org and tenants, which the eval org never matches)
 - **approval required**: `wire_transfer` → a `compliance-rbi` `require_approval` policy → on v11 a deny with `approval_required` → `-32001`, backend untouched
 - **fail-closed**: dead PDP → `-32003`
 - **tenant-isolation**: a foreign tenant id → PDP `403` (tenant mismatch) → blocked, backend untouched
@@ -65,7 +65,7 @@ export AXONFLOW_ORG_ID=<the licence's org id> AXONFLOW_LEADER_EMAIL=<a test addr
 COMPOSE_PROJECT=cd-live AXONFLOW_ENDPOINT=http://localhost:8080 KEEP_STACK=1 ./matrix.sh  # reuse a running stack
 ```
 
-`matrix.sh` seeds the BukuWarung policy bundle SQL (default path is a sibling
+`matrix.sh` seeds the policy bundle SQL (default path is a sibling
 `axonflow-enterprise` checkout, override with `AXONFLOW_BUNDLE_SQL`) **and** two
 harness-org-scoped rows (read-only write/DDL block + a `compliance-rbi`
 `require_approval` gate) so the read-only and needs_approval cases fire under the
@@ -99,7 +99,7 @@ license. It boots postgres + the agent (`docker-compose.yml`), waits for
 
 ## Components
 
-- `backend/` — a real BukuWarung-shaped MCP server on the **official MCP Go SDK**
+- `backend/` — a real fintech-shaped MCP server on the **official MCP Go SDK**
   (separate Go module so the proxy's zero-dependency `go.mod` stays clean). Tools:
   `export_ledger` / `get_sales_summary` (allow, no PII), `lookup_customer`
   (PII + a NIK-keyed map → redact; takes a **clean `customer_id`** so the

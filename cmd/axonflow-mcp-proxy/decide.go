@@ -302,7 +302,7 @@ func defaultGatewayID() string {
 // newSessionID mints a 16-hex session id correlating every Layer-1 audit row
 // produced during one Claude Desktop ↔ proxy connection. Forwarded to the PDP
 // as x-session-id so the SIEM joins AxonFlow's decision record to BigQuery
-// Cloud Audit Logs by session_id (BukuWarung 4-layer audit, Layer 3).
+// Cloud Audit Logs by session_id (the 4-layer audit design, Layer 3).
 func newSessionID() string {
 	return "cd-" + randomHex(8) + fmt.Sprintf("-%d", time.Now().Unix())
 }

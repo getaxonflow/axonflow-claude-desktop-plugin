@@ -200,7 +200,7 @@ CASES = {
     111: ("deny_injection_override", "deny", None),
     112: ("deny_injection_reveal", "deny", None),
     113: ("deny_dangerous_command", "deny", None),
-    # ---- DENY (BukuWarung bundle: read-only write/DDL) ----
+    # ---- DENY (the policy bundle: read-only write/DDL) ----
     114: ("deny_readonly_delete", "deny", None),
     115: ("deny_readonly_update", "deny", None),
     116: ("deny_readonly_insert", "deny", None),
@@ -210,7 +210,7 @@ CASES = {
 
 # Tools whose execution-proof string must be ABSENT when a call is denied
 # (proves the backend was never reached).
-BACKEND_EXEC_MARKERS = ["bukuwarung-reporting", "bukuwarung-shell", "would_run", "executed"]
+BACKEND_EXEC_MARKERS = ["example-reporting", "example-shell", "would_run", "executed"]
 
 print("================ DETERMINISTIC governance matrix ================")
 print(f"  {len(CASES)} core cases + fail-closed + tenant-isolation\n")

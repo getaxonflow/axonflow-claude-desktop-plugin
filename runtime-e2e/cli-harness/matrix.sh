@@ -30,7 +30,7 @@
 # Every case is also run through the UNIVERSAL PII-leak detector (matrix_assert.py).
 #
 # Requirements: docker, AXONFLOW_LICENSE_KEY (Enterprise, org=AXONFLOW_ORG_ID),
-# and the BukuWarung policy bundle SQL (for the read-only cases) — by default the
+# and the policy bundle SQL (for the read-only cases) — by default the
 # canonical file in a sibling axonflow-enterprise checkout; override with
 # AXONFLOW_BUNDLE_SQL.
 #
@@ -52,7 +52,7 @@ export HARNESS_ORG="$ORG"
 LEADER="${AXONFLOW_LEADER_EMAIL:?set AXONFLOW_LEADER_EMAIL}"
 ENDPOINT="${AXONFLOW_ENDPOINT:-http://localhost:8080}"
 FOREIGN_TENANT="${FOREIGN_TENANT:-acme-corp}"
-BUNDLE_SQL="${AXONFLOW_BUNDLE_SQL:-$ROOT/../axonflow-enterprise/config/seed-data/bukuwarung/bukuwarung_policy_bundle.sql}"
+BUNDLE_SQL="${AXONFLOW_BUNDLE_SQL:-$ROOT/../axonflow-enterprise/config/seed-data/example/example_policy_bundle.sql}"
 WORK="$(mktemp -d)"
 
 : "${AXONFLOW_LICENSE_KEY:?set AXONFLOW_LICENSE_KEY to an Enterprise license (org=$ORG)}"
@@ -75,7 +75,7 @@ trap cleanup EXIT
 # --- 1. build proxy + the real SDK backend ---------------------------------
 ok "building proxy + official-SDK backend"
 PROXY="$WORK/axonflow-mcp-proxy"
-BACKEND="$WORK/bukuwarung-backend"
+BACKEND="$WORK/example-backend"
 if [ -n "${PROXY_BIN:-}" ]; then
   cp "$PROXY_BIN" "$PROXY"; chmod +x "$PROXY"
 else
@@ -105,25 +105,25 @@ echo ""
 [ "$tier" = "Enterprise" ] || { echo "FATAL: agent did not reach tier=Enterprise (got '$tier')"; exit 1; }
 echo "    /health → tier=Enterprise"
 
-# --- 3. seed the BukuWarung policy bundle (read-only enforcement) -----------
+# --- 3. seed the policy bundle (read-only enforcement) ---------------------
 # The DELETE/UPDATE/INSERT deny cases (114-116) require the bundle's
 # buku_org_readonly_write_block row; vanilla system policies allow writes. The
 # decide path reads static_policies live, so no agent restart is needed.
 if [ -f "$BUNDLE_SQL" ]; then
-  ok "seeding BukuWarung policy bundle ($BUNDLE_SQL)"
+  ok "seeding the policy bundle ($BUNDLE_SQL)"
   docker compose -f "$COMPOSE" -p "$PROJECT" exec -T postgres \
     psql -U axonflow -d axonflow < "$BUNDLE_SQL" >/dev/null 2>&1 \
     && echo "    bundle seeded (idempotent)" \
     || { echo "FATAL: bundle seed failed"; exit 1; }
 else
-  echo "FATAL: BukuWarung bundle SQL not found at $BUNDLE_SQL — set AXONFLOW_BUNDLE_SQL."
+  echo "FATAL: bundle SQL not found at $BUNDLE_SQL — set AXONFLOW_BUNDLE_SQL."
   echo "       (read-only cases 114-116 require it; refusing to silently skip.)"
   exit 1
 fi
 
 # --- 3a. seed policies scoped to the HARNESS's actual org/tenant ------------
-# The bundle above hard-codes org=bukuwarung + tenant=bukuwarung-{marketing,ops,
-# fintech}. This harness drives as org=$ORG / tenant=$ORG (AXONFLOW_ORG_ID, which
+# The bundle above hard-codes its own org and its own tenants. This harness
+# drives as org=$ORG / tenant=$ORG (AXONFLOW_ORG_ID, which
 # the bundle's rows never name), so the bundle's tenant-scoped read-only rows never
 # fire here — the DELETE/UPDATE/INSERT cases would see a genuine PDP `allow` and
 # the proxy would (correctly) forward them. Seed the two verdict-shapes the

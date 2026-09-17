@@ -30,7 +30,7 @@ type Config struct {
 
 	// Enforcement posture. FailOpen is the deliberate opt-in escape hatch; the
 	// default is fail-CLOSED (PDP unreachable → block) because this fronts a
-	// fintech's tool surface (BukuWarung). Opt in only with eyes open.
+	// fintech tool surface. Opt in only with eyes open.
 	FailOpen bool // AXONFLOW_FAIL_MODE=open
 
 	// RedactResponses controls when the response-governance engine (check-output)

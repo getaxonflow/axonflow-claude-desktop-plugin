@@ -274,7 +274,7 @@ func (p *Proxy) enforce(ctx context.Context, id json.RawMessage, params ToolCall
 		// Enterprise JWT, optional — a PEP that has the Desktop user's token
 		// forwards it so the audit row carries the validated user.
 		UserToken: p.cfg.UserToken,
-		// BukuWarung Layer-2 audit headers → land in the platform decision
+		// Layer-2 audit headers → land in the platform decision
 		// record's context map (allowlist covers x-ai-agent / x-session-id /
 		// x-leader-identity) so the SIEM joins by session_id.
 		Context: map[string]interface{}{

@@ -67,7 +67,7 @@ trap cleanup EXIT
 # the shipped Desktop artifact — not just a dev build — is what gets verified.
 ok "building proxy + official-SDK backend"
 PROXY="$WORK/axonflow-mcp-proxy"
-BACKEND="$WORK/bukuwarung-backend"
+BACKEND="$WORK/example-backend"
 if [ -n "${PROXY_BIN:-}" ]; then
   cp "$PROXY_BIN" "$PROXY"; chmod +x "$PROXY"
   echo "    proxy:   $PROXY (from PROXY_BIN=$PROXY_BIN)"
