@@ -23,18 +23,20 @@
 #   deny:    DROP / UNION / OR-true / injection-override /          (system policies)
 #            injection-reveal / dangerous-command
 #   deny:    DELETE / UPDATE / INSERT                               (harness-org read-only block)
-#   needs_approval: wire_transfer -> compliance-rbi require_approval -> -32002 (HITL held)
+#   approval required: wire_transfer -> compliance-rbi require_approval -> on v11 a deny
+#            whose reason starts approval_required -> -32001 (decide has no hold)
 #   fail-closed: PDP unreachable -> -32003
 #   tenant-isolation: foreign tenant -> PDP 403 -> blocked
 # Every case is also run through the UNIVERSAL PII-leak detector (matrix_assert.py).
 #
 # Requirements: docker, AXONFLOW_LICENSE_KEY (Enterprise, org=AXONFLOW_ORG_ID),
-# and the BukuWarung policy bundle SQL (for the read-only cases) — by default the
+# and the policy bundle SQL (for the read-only cases) — by default the
 # canonical file in a sibling axonflow-enterprise checkout; override with
 # AXONFLOW_BUNDLE_SQL.
 #
 # Usage:
-#   export AXONFLOW_LICENSE_KEY="$(cat bukuwarung.license)"
+#   export AXONFLOW_LICENSE_KEY="$(cat /path/to/enterprise.license)"
+#   export AXONFLOW_ORG_ID=<the licence's org id> AXONFLOW_LEADER_EMAIL=<a test address>
 #   ./matrix.sh                       # brings the stack up, runs, tears it down
 #   KEEP_STACK=1 ./matrix.sh          # leave the stack up
 #   COMPOSE_PROJECT=cd-live AXONFLOW_ENDPOINT=http://localhost:8080 ./matrix.sh  # reuse a running stack
@@ -44,11 +46,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 COMPOSE="$HERE/docker-compose.yml"
 PROJECT="${COMPOSE_PROJECT:-sh-e2e-matrix}"
-ORG="${AXONFLOW_ORG_ID:-bukuwarung-eval}"
-LEADER="${AXONFLOW_LEADER_EMAIL:-ben.jonathan@bukuwarung.test}"
+ORG="${AXONFLOW_ORG_ID:?set AXONFLOW_ORG_ID to the org id of the Enterprise licence}"
+# The compose file's agent ORG_ID must be the same org, so it is passed through.
+export HARNESS_ORG="$ORG"
+LEADER="${AXONFLOW_LEADER_EMAIL:?set AXONFLOW_LEADER_EMAIL}"
 ENDPOINT="${AXONFLOW_ENDPOINT:-http://localhost:8080}"
 FOREIGN_TENANT="${FOREIGN_TENANT:-acme-corp}"
-BUNDLE_SQL="${AXONFLOW_BUNDLE_SQL:-$ROOT/../axonflow-enterprise/config/seed-data/bukuwarung/bukuwarung_policy_bundle.sql}"
+BUNDLE_SQL="${AXONFLOW_BUNDLE_SQL:-$ROOT/../axonflow-enterprise/config/seed-data/example/example_policy_bundle.sql}"
 WORK="$(mktemp -d)"
 
 : "${AXONFLOW_LICENSE_KEY:?set AXONFLOW_LICENSE_KEY to an Enterprise license (org=$ORG)}"
@@ -71,7 +75,7 @@ trap cleanup EXIT
 # --- 1. build proxy + the real SDK backend ---------------------------------
 ok "building proxy + official-SDK backend"
 PROXY="$WORK/axonflow-mcp-proxy"
-BACKEND="$WORK/bukuwarung-backend"
+BACKEND="$WORK/example-backend"
 if [ -n "${PROXY_BIN:-}" ]; then
   cp "$PROXY_BIN" "$PROXY"; chmod +x "$PROXY"
 else
@@ -101,34 +105,35 @@ echo ""
 [ "$tier" = "Enterprise" ] || { echo "FATAL: agent did not reach tier=Enterprise (got '$tier')"; exit 1; }
 echo "    /health → tier=Enterprise"
 
-# --- 3. seed the BukuWarung policy bundle (read-only enforcement) -----------
+# --- 3. seed the policy bundle (read-only enforcement) ---------------------
 # The DELETE/UPDATE/INSERT deny cases (114-116) require the bundle's
 # buku_org_readonly_write_block row; vanilla system policies allow writes. The
 # decide path reads static_policies live, so no agent restart is needed.
 if [ -f "$BUNDLE_SQL" ]; then
-  ok "seeding BukuWarung policy bundle ($BUNDLE_SQL)"
+  ok "seeding the policy bundle ($BUNDLE_SQL)"
   docker compose -f "$COMPOSE" -p "$PROJECT" exec -T postgres \
     psql -U axonflow -d axonflow < "$BUNDLE_SQL" >/dev/null 2>&1 \
     && echo "    bundle seeded (idempotent)" \
     || { echo "FATAL: bundle seed failed"; exit 1; }
 else
-  echo "FATAL: BukuWarung bundle SQL not found at $BUNDLE_SQL — set AXONFLOW_BUNDLE_SQL."
+  echo "FATAL: bundle SQL not found at $BUNDLE_SQL — set AXONFLOW_BUNDLE_SQL."
   echo "       (read-only cases 114-116 require it; refusing to silently skip.)"
   exit 1
 fi
 
 # --- 3a. seed policies scoped to the HARNESS's actual org/tenant ------------
-# The bundle above hard-codes org=bukuwarung + tenant=bukuwarung-{marketing,ops,
-# fintech}. This harness drives as org=$ORG / tenant=$ORG (the design partner's
-# eval org, bukuwarung-eval), so the bundle's tenant-scoped read-only rows never
+# The bundle above hard-codes its own org and its own tenants. This harness
+# drives as org=$ORG / tenant=$ORG (AXONFLOW_ORG_ID, which
+# the bundle's rows never name), so the bundle's tenant-scoped read-only rows never
 # fire here — the DELETE/UPDATE/INSERT cases would see a genuine PDP `allow` and
 # the proxy would (correctly) forward them. Seed the two verdict-shapes the
 # bundle can't provide for THIS org so cases 114-116 (read-only deny) and 117
-# (needs_approval) exercise a real PDP verdict rather than a vacuous pass:
+# (approval required) exercise a real PDP verdict rather than a vacuous pass:
 #   * read-only write/DDL block  → action=block          → verdict=deny (-32001)
 #   * require_approval            → category=compliance-rbi (NOT coerced by the
 #     detection ActionOverrides map, unlike sensitive-data/security/pii, which
-#     the /decide lever forces to block) → verdict=needs_approval (-32002)
+#     the /decide lever forces to block) → on AxonFlow v11 a deny whose reason
+#     starts approval_required (-32001); decide has no hold
 ok "seeding harness-org policies (org=$ORG, tenant=$ORG)"
 PSQL -c "INSERT INTO static_policies
   (policy_id, name, category, tier, pattern, severity, description, action, priority, enabled, tenant_id, org_id, created_by, phase, action_request, action_response)

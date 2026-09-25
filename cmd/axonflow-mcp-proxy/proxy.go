@@ -274,7 +274,7 @@ func (p *Proxy) enforce(ctx context.Context, id json.RawMessage, params ToolCall
 		// Enterprise JWT, optional — a PEP that has the Desktop user's token
 		// forwards it so the audit row carries the validated user.
 		UserToken: p.cfg.UserToken,
-		// BukuWarung Layer-2 audit headers → land in the platform decision
+		// Layer-2 audit headers → land in the platform decision
 		// record's context map (allowlist covers x-ai-agent / x-session-id /
 		// x-leader-identity) so the SIEM joins by session_id.
 		Context: map[string]interface{}{
@@ -295,9 +295,9 @@ func (p *Proxy) enforce(ctx context.Context, id json.RawMessage, params ToolCall
 		// A 4xx is misconfiguration (bad creds / bad request), not PDP
 		// degradation — forwarding would be silently ungoverned, so it is
 		// NEVER fail-open regardless of posture.
-		if isClientError(err) {
+		if ce, ok := asClientError(err); ok {
 			return callOutcome{verdict: verdictDeny, originalToolName: r.originalName, backendID: r.backendID,
-				response: errorResponse(id, codePolicyUnavailable, "policy service rejected the request (check proxy credentials/config)")}
+				response: errorResponse(id, codePolicyUnavailable, refusalMessage("policy service", ce))}
 		}
 		// Transport error / 5xx (PDP unreachable). Honour the posture: fail-open
 		// forwards the call (matching the reference adapter), but still runs the
@@ -335,14 +335,13 @@ func (p *Proxy) enforce(ctx context.Context, id json.RawMessage, params ToolCall
 	case verdictAllow:
 		return p.forwardAndRedact(ctx, id, r, params, *resp, false)
 	case verdictDeny:
-		reason := "request blocked by policy"
-		if len(resp.Reasons) > 0 {
-			reason = resp.Reasons[0]
-		}
-		out.response = denyResponse(id, codePolicyDeny, reason, resp)
+		out.response = denyResponse(id, codePolicyDeny, denyReason(resp.Reasons, "request blocked by policy"), resp)
 		return out
 	case verdictNeedsApproval:
-		out.response = denyResponse(id, codeNeedsApproval, "tool call requires approval", resp)
+		// Handled, fail-closed, and not what AxonFlow v11 answers on decide: a
+		// plane with no hold refuses an approval-requiring call as a deny whose
+		// reason starts approval_required (PRD v11 §1 item 13).
+		out.response = denyResponse(id, codeNeedsApproval, "tool call refused pending approval: "+denyReason(resp.Reasons, "no reason given"), resp)
 		return out
 	default:
 		// Unknown verdict — fail-closed unless configured otherwise.
@@ -493,6 +492,11 @@ func (p *Proxy) redactionFailClosed(id json.RawMessage, out callOutcome, err err
 		}
 		logStderr("response BLOCKED by output policy (not forwarded): %s", reason)
 		out.response = errorResponse(id, codePolicyDeny, reason)
+		return out
+	}
+	if ce, ok := asClientError(err); ok {
+		logStderr("response governance refused the check — failing closed (response NOT forwarded): %v", err)
+		out.response = errorResponse(id, codePolicyUnavailable, refusalMessage("response governance", ce)+"; response not forwarded (fail-closed)")
 		return out
 	}
 	logStderr("response governance unavailable — failing closed (response NOT forwarded): %v", err)

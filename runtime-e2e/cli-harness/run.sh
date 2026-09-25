@@ -23,7 +23,8 @@
 #                            (default axonflow-agent:sh-e2e — see docker-compose.yml)
 #
 # Usage:
-#   export AXONFLOW_LICENSE_KEY="$(cat bukuwarung.license)"
+#   export AXONFLOW_LICENSE_KEY="$(cat /path/to/enterprise.license)"
+#   export AXONFLOW_ORG_ID=<the licence's org id> AXONFLOW_LEADER_EMAIL=<a test address>
 #   export AXONFLOW_AGENT_IMAGE=axonflow-agent:sh-e2e
 #   ./run.sh                 # brings the stack up, runs, tears it down
 #   KEEP_STACK=1 ./run.sh    # leave the stack running for inspection
@@ -33,8 +34,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 COMPOSE="$HERE/docker-compose.yml"
 PROJECT="${COMPOSE_PROJECT:-sh-e2e-cli}"
-ORG="${AXONFLOW_ORG_ID:-bukuwarung}"
-LEADER="${AXONFLOW_LEADER_EMAIL:-ben.jonathan@bukuwarung.test}"
+# Both are required: the org must equal the licence's org id, and the harness
+# asserts the leader address, so neither has a default.
+ORG="${AXONFLOW_ORG_ID:?set AXONFLOW_ORG_ID to the org id of the Enterprise licence}"
+# The compose file's agent ORG_ID must be the same org, so it is passed through.
+export HARNESS_ORG="$ORG"
+LEADER="${AXONFLOW_LEADER_EMAIL:?set AXONFLOW_LEADER_EMAIL}"
 ENDPOINT="http://localhost:8080"
 WORK="$(mktemp -d)"
 
@@ -62,7 +67,7 @@ trap cleanup EXIT
 # the shipped Desktop artifact — not just a dev build — is what gets verified.
 ok "building proxy + official-SDK backend"
 PROXY="$WORK/axonflow-mcp-proxy"
-BACKEND="$WORK/bukuwarung-backend"
+BACKEND="$WORK/example-backend"
 if [ -n "${PROXY_BIN:-}" ]; then
   cp "$PROXY_BIN" "$PROXY"; chmod +x "$PROXY"
   echo "    proxy:   $PROXY (from PROXY_BIN=$PROXY_BIN)"

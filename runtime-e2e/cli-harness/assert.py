@@ -139,9 +139,9 @@ if drow:
     check(drow["response_record_count"] == 0, "no records forwarded on deny (response_record_count=0)")
 check("-32001" in dout, "Claude received JSON-RPC -32001 (deny) for the call")
 # Real proof the backend was NOT reached: run_sql_report echoes "would_run" +
-# the engine tag "bukuwarung-reporting" iff it executes. Neither may appear in
+# the engine tag "example-reporting" iff it executes. Neither may appear in
 # what Claude got back, since the PDP blocked the call before forwarding.
-check("bukuwarung-reporting" not in dout and "would_run" not in dout,
+check("example-reporting" not in dout and "would_run" not in dout,
       "backend never executed (its run_sql_report echo is absent from Claude's response)")
 if drow:
     db = db_row(drow["decision_id"])

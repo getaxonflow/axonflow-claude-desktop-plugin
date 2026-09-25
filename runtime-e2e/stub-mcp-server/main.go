@@ -3,7 +3,7 @@
 
 // Command stub-mcp-server is a minimal stdio MCP server used by the runtime-e2e
 // harness as a backend behind the AxonFlow governance proxy. It stands in for a
-// real BukuWarung backend (Panacea/CRM/BigQuery) and deliberately returns
+// real back-office backend (CRM / ledger / BigQuery) and deliberately returns
 // PII-bearing records so the proxy's redact_pii obligation is observable
 // end-to-end.
 //

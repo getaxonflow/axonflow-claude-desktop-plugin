@@ -336,7 +336,7 @@ func newProxyWithBackend(t *testing.T, endpoint string, b Backend) *Proxy {
 		GatewayID:       "claude_desktop.test",
 		Timeout:         2 * time.Second,
 		BackendTimeout:  5 * time.Second,
-		LeaderEmail:     "leader@bukuwarung.test",
+		LeaderEmail:     "leader@acme-eval.test",
 		AIAgent:         "claude-desktop",
 		SessionID:       "sess-test",
 		RedactResponses: redactOff, // isolate the reconnect path from response governance

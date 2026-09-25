@@ -200,17 +200,17 @@ CASES = {
     111: ("deny_injection_override", "deny", None),
     112: ("deny_injection_reveal", "deny", None),
     113: ("deny_dangerous_command", "deny", None),
-    # ---- DENY (BukuWarung bundle: read-only write/DDL) ----
+    # ---- DENY (the policy bundle: read-only write/DDL) ----
     114: ("deny_readonly_delete", "deny", None),
     115: ("deny_readonly_update", "deny", None),
     116: ("deny_readonly_insert", "deny", None),
-    # ---- NEEDS_APPROVAL (HITL gate) ----
-    117: ("needs_approval_wire", "needs_approval", None),
+    # ---- APPROVAL REQUIRED (v11: a deny whose reason starts approval_required) ----
+    117: ("approval_required_deny", "needs_approval", None),
 }
 
 # Tools whose execution-proof string must be ABSENT when a call is denied
 # (proves the backend was never reached).
-BACKEND_EXEC_MARKERS = ["bukuwarung-reporting", "bukuwarung-shell", "would_run", "executed"]
+BACKEND_EXEC_MARKERS = ["example-reporting", "example-shell", "would_run", "executed"]
 
 print("================ DETERMINISTIC governance matrix ================")
 print(f"  {len(CASES)} core cases + fail-closed + tenant-isolation\n")
@@ -247,11 +247,18 @@ for cid, (label, want_verdict, cell) in CASES.items():
         check(not reached, f"[{label}] backend never executed (no exec marker)"
               + ("" if not reached else f" — LEAKED markers {reached}"))
     elif want_verdict == "needs_approval":
-        code = o.get("error", {}).get("code")
-        check(code == -32002, f"[{label}] held for approval with -32002 (got {code})")
-        # a call held for HITL approval must NOT have been forwarded.
+        # AxonFlow v11 decide has no hold: an approval-requiring call is a DENY
+        # whose reason starts approval_required, rendered as -32001 with that
+        # reason in the message. Asserting the reason, not only the code, so a
+        # different deny cannot pass this case.
+        err = o.get("error", {})
+        code = err.get("code")
+        msg = err.get("message", "")
+        check(code == -32001, f"[{label}] refused with -32001 (got {code})")
+        check(msg.startswith("approval_required"), f"[{label}] reason starts approval_required (got {msg[:120]!r})")
+        # a refused call must NOT have been forwarded.
         reached = [m for m in BACKEND_EXEC_MARKERS if m in body]
-        check(not reached, f"[{label}] backend never executed (approval-held)"
+        check(not reached, f"[{label}] backend never executed (approval required)"
               + ("" if not reached else f" — LEAKED markers {reached}"))
 
 # ---- audit cross-check ----------------------------------------------------
@@ -299,7 +306,9 @@ representatives = [
     ("allow", first_audit(lambda r: r["tool_name"] == "export_ledger" and r["verdict"] == "allow"), "allow"),
     ("deny", first_audit(lambda r: r["tool_name"] == "run_sql_report" and r["verdict"] == "deny"), "deny"),
     ("redact", first_audit(lambda r: r["tool_name"] == "lookup_customer" and r.get("redaction_count", 0) > 0), "allow"),
-    ("needs_approval", first_audit(lambda r: r.get("verdict") == "needs_approval"), "needs_approval"),
+    # Case 117: on AxonFlow v11 decide has no hold, so the approval-requiring
+    # call is a deny, identified by the harness-seeded approval policy.
+    ("approval_required", first_audit(lambda r: r.get("verdict") == "deny" and any("shmatrix_require_approval" in p for p in (r.get("evaluated_policies") or []))), "deny"),
 ]
 for name, row, want in representatives:
     check(row is not None, f"[{name}] a proxy audit row with a decision_id exists")

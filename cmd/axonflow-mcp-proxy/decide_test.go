@@ -87,7 +87,7 @@ func TestDecide_ClientError4xx(t *testing.T) {
 	if status != 401 {
 		t.Fatalf("status = %d, want 401", status)
 	}
-	if !isClientError(err) {
+	if _, ok := asClientError(err); !ok {
 		t.Fatalf("expected clientError, got %v", err)
 	}
 }
@@ -109,7 +109,7 @@ func TestDecide_TransportError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected transport error")
 	}
-	if isClientError(err) {
+	if _, ok := asClientError(err); ok {
 		t.Fatalf("transport error must not be a clientError")
 	}
 }

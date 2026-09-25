@@ -1,7 +1,7 @@
 // Copyright 2026 AxonFlow
 // SPDX-License-Identifier: MIT
 
-// Command bukuwarung-backend is a REAL MCP server built on the official
+// Command example-backend is a REAL MCP server built on the official
 // Model Context Protocol Go SDK (github.com/modelcontextprotocol/go-sdk/mcp).
 //
 // It is the backend the AxonFlow governance proxy fronts in the CLI-harness
@@ -11,7 +11,7 @@
 // genuine SDK-based server, driven by a genuine MCP client (Claude Code), so the
 // whole chain — client → proxy → backend — is real.
 //
-// It stands in for a BukuWarung back-office MCP server (Panacea / CRM / ledger)
+// It stands in for a fintech back-office MCP server (CRM / ledger)
 // and returns Indonesian-PII-bearing records so the proxy's redact_pii
 // obligation is observable end-to-end, including a record keyed by a NIK (the
 // §4.3 key-redaction fix in the proxy).
@@ -210,15 +210,15 @@ func handleRunSQLReport(_ context.Context, _ *mcp.CallToolRequest, in runSQLRepo
 	// call because in.SQL carries the injection. If execution gets here at all
 	// during the deny test, the assertion fails (backend was reached). On a
 	// benign SQL it just echoes, proving the tool is otherwise callable.
-	out := sqlReportOut{WouldRun: in.SQL, Engine: "bukuwarung-reporting"}
+	out := sqlReportOut{WouldRun: in.SQL, Engine: "example-reporting"}
 	return textResult(out), out, nil
 }
 
 func handleRunCommand(_ context.Context, _ *mcp.CallToolRequest, in runCommandIn) (*mcp.CallToolResult, commandOut, error) {
-	// Deny path for dangerous-command policies. The unique echo "bukuwarung-shell"
+	// Deny path for dangerous-command policies. The unique echo "example-shell"
 	// proves backend reach on the deny test — it must be ABSENT from any blocked
 	// call's response.
-	out := commandOut{Executed: in.Command, Shell: "bukuwarung-shell"}
+	out := commandOut{Executed: in.Command, Shell: "example-shell"}
 	return textResult(out), out, nil
 }
 
@@ -267,18 +267,18 @@ func handleGetSalesSummary(_ context.Context, _ *mcp.CallToolRequest, in getSale
 
 func main() {
 	log.SetOutput(os.Stderr)
-	log.SetPrefix("bukuwarung-backend ")
+	log.SetPrefix("example-backend ")
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "bukuwarung-backend", Version: "1.0.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "example-backend", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "export_ledger",
-		Description: "Export the last N BukuWarung ledger rows (no PII).",
+		Description: "Export the last N ledger rows (no PII).",
 	}, handleExportLedger)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "lookup_customer",
-		Description: "Look up a BukuWarung customer by customer_id (returns the customer's Indonesian PII and related accounts).",
+		Description: "Look up a customer by customer_id (returns the customer's Indonesian PII and related accounts).",
 	}, handleLookupCustomer)
 
 	mcp.AddTool(server, &mcp.Tool{

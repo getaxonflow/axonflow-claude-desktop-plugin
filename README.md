@@ -49,10 +49,11 @@ extension.
 | On every `tools/call` | Behaviour |
 |---|---|
 | **allow** | forwarded to the backend unchanged |
-| **deny** | blocked with JSON-RPC `-32001`; the deny reason + `decision_id`/`trace_id` surface to the user; the backend is never called |
-| **needs_approval** | held with `-32002` (HITL); not forwarded |
+| **deny** | blocked with JSON-RPC `-32001`; the message is every reason the platform gave, in order, joined with `; ` (for example `unknown_constraint; ceiling.refund (organization, document version 1) could not be evaluated: ...`), and `decision_id`/`trace_id`/`reasons` are in the error data; the backend is never called |
+| **approval required** | on AxonFlow v11, `/api/v1/decide` has no hold: a call that needs approval is refused as a **deny** whose reason starts `approval_required` (`-32001`). The proxy still handles the verdict `needs_approval` if a platform sends it: refused with `-32002` `tool call refused pending approval: <reasons>`, not forwarded |
 | **response redaction** | every allowed backend response is sent to AxonFlow's authoritative engine (`POST /api/v1/mcp/check-output`) and PII is masked before it reaches Claude's context — the cross-border-data control. Coverage tracks the platform's detectors (NIK + SSN + email + phone …); the proxy never re-implements redaction locally. |
 | **response blocked** | if the engine hard-blocks a response (critical-PII deny, response SQLi, exfiltration), the call is denied (`-32001`) and the response is never forwarded |
+| **policy service refused the request** (any 4xx from decide, and any check-output 4xx except a block) | always `-32003`, never forwarded, under either fail mode; the message names the cause and quotes the platform (see **When a call is refused** below). A decide error body says `verdict: deny` on every 4xx; that is a fail-closed envelope, not a policy decision, so it is never shown as a `-32001` deny |
 | **PDP / engine unreachable** | **fail-closed by default** (`-32003`): the call is blocked. The response plane is *unconditionally* fail-closed — if the redaction engine is unreachable the (already-executed) response is **not** forwarded, even under fail-open. Opt into request-plane fail-open only with eyes open. |
 
 Every call writes one **Layer-1 audit row** (`session_id`, `leader_email`,
@@ -131,13 +132,33 @@ precedence in the audit row's `user_email` — the role stays the token's.)
 |---|---|---|
 | **valid minted token** | verdict per policy | attributed to the token's user (email + role) on decide **and** check-output rows |
 | **absent** (left blank) | verdict per policy | attributed to the org's service identity (`<org>@axonflow.local`) |
-| **expired / revoked / malformed** | the platform 401s with `verdict: deny`; the proxy surfaces a structured JSON-RPC `-32003` deny (`policy service rejected the request (check proxy credentials/config)`) and the backend is **never called**. This is never fail-open — a rejected token is a governance verdict, not an outage, so `AXONFLOW_FAIL_MODE=open` does not forward it. | `blocked` with `security_event: user_token_rejected` |
+| **expired / revoked / malformed** | the platform 401s with `verdict: deny`; the proxy surfaces a JSON-RPC `-32003` refusal, `policy service rejected the proxy's credentials (HTTP 401): <platform text>. Check AXONFLOW_CLIENT_ID, AXONFLOW_CLIENT_SECRET and AXONFLOW_USER_TOKEN`, and the backend is **never called**. This is never fail-open — a rejected token is a governance verdict, not an outage, so `AXONFLOW_FAIL_MODE=open` does not forward it. | `blocked` with `security_event: user_token_rejected` |
 
 So: leave it blank for service-identity attribution, set it to a minted token
-for per-user attribution — and when calls suddenly start failing with the
-`-32003` `policy service rejected the request (check proxy credentials/config)`
-message, an **expired or revoked user token** is the first thing to check
-(rotate it via the same admin API).
+for per-user attribution — and when calls suddenly start failing with
+`-32003` `policy service rejected the proxy's credentials (HTTP 401)`, an
+**expired or revoked user token** is the first thing to check (rotate it via
+the same admin API).
+
+### When a call is refused
+
+Every refusal below is JSON-RPC `-32003`, fails closed, and never reaches the
+backend. The message says which refusal it is and quotes the platform's own
+text, so read it before changing credentials:
+
+| HTTP | Message starts | What to check |
+|---|---|---|
+| 401 | `policy service rejected the proxy's credentials (HTTP 401): ...` | `AXONFLOW_CLIENT_ID`, `AXONFLOW_CLIENT_SECRET`, and an expired or revoked `AXONFLOW_USER_TOKEN` |
+| 402 | `policy service refused the request: a tier limit of this deployment was reached (HTTP 402): ...` | the deployment's licence tier (for example the service-principal limit); not a credential problem |
+| 429 | `policy service refused the request: a rate limit was reached (HTTP 429, limit_type "...", resets at ..., retry after N s): ...` | a quota or rate limit; each detail appears only when the platform sends it. Not a credential problem |
+| 404, 405 | `policy service rejected the request (HTTP <status>): .... Check AXONFLOW_ENDPOINT: ...` | `AXONFLOW_ENDPOINT` points at something that is not an AxonFlow agent serving this route, or at a platform too old for it |
+| other 4xx | `policy service rejected the request (HTTP <status>): ...` | the quoted text (for example a 403 `caller_identity.org_id does not match authenticated identity`: `AXONFLOW_ORG_ID` does not match the credential) |
+
+The same refusals from response governance (`/api/v1/mcp/check-output`) start
+`response governance ...` and end `; response not forwarded (fail-closed)`. A
+check-output 403 whose body is a decision (`allowed: false`) is a block
+(`-32001`, the engine's `block_reason`); a 403 without one is a refusal
+(`-32003`).
 
 ### PII posture: redact (chat default) vs. block
 

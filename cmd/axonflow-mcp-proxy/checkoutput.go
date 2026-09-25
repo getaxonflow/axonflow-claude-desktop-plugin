@@ -85,6 +85,16 @@ func (e *outputBlockedError) Error() string {
 	return "response blocked by output policy"
 }
 
+// isOutputDecision reports whether a check-output body is a decision: a JSON
+// object whose `allowed` is present and false. An absent `allowed` is not read
+// as false.
+func isOutputDecision(body []byte) bool {
+	var probe struct {
+		Allowed *bool `json:"allowed"`
+	}
+	return json.Unmarshal(body, &probe) == nil && probe.Allowed != nil && !*probe.Allowed
+}
+
 // asOutputBlocked reports whether err is a policy block from check-output.
 func asOutputBlocked(err error) (*outputBlockedError, bool) {
 	var be *outputBlockedError
@@ -216,14 +226,15 @@ func (c *CheckOutputClient) CheckOutput(ctx context.Context, message, traceparen
 			return nil, &outputBlockedError{Reason: parsed.BlockReason, DecisionID: parsed.DecisionID}
 		}
 		return c.buildResult(parsed)
-	case resp.StatusCode == http.StatusForbidden:
-		// 403 is the engine's block status (critical-PII / response SQLi / exfil).
-		// Surface the engine's block_reason when the body parses; never forward.
+	case resp.StatusCode == http.StatusForbidden && isOutputDecision(respBody):
+		// 403 carrying allowed:false is the engine's block (critical-PII /
+		// response SQLi / exfil). Surface its block_reason; never forward.
 		return nil, &outputBlockedError{Reason: parsed.BlockReason, DecisionID: parsed.DecisionID}
 	case resp.StatusCode >= 400 && resp.StatusCode < 500:
-		// Other 4xx (400 bad request, 401 unauthorized) is misconfiguration, not
-		// degradation — still fail-closed, but as a distinct error type.
-		return nil, &clientError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		// Any other 4xx, including a 403 that is NOT a decision (a tier-feature
+		// limit answers 403 with the rate-limit envelope), is a refusal, not a
+		// block and not an outage: still fail-closed, named by refusalMessage.
+		return nil, &clientError{StatusCode: resp.StatusCode, Body: string(respBody), RetryAfter: resp.Header.Get("Retry-After")}
 	default:
 		return nil, fmt.Errorf("check-output returned %d: %s", resp.StatusCode, string(respBody))
 	}

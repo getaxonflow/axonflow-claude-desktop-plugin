@@ -138,7 +138,7 @@ func newTestProxy(t *testing.T, endpoint string, backends ...*fakeBackend) *Prox
 		OrgID:       "org-test",
 		GatewayID:   "claude_desktop.test",
 		Timeout:     2 * time.Second,
-		LeaderEmail: "leader@bukuwarung.test",
+		LeaderEmail: "leader@acme-eval.test",
 		AIAgent:     "claude-desktop",
 		SessionID:   "sess-test",
 		// Match the production default: scan every response unconditionally.

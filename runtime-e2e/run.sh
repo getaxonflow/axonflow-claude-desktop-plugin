@@ -22,6 +22,7 @@
 #   export AXONFLOW_AGENT_IMAGE=axonflow-agent:enterprise-local
 #   export AXONFLOW_LICENSE_KEY="AXON-…"          # real Ed25519 Enterprise license
 #   export AXONFLOW_ORG_ID="desktop-e2e"          # license org id (Basic-auth user)
+#   export AXONFLOW_LEADER_EMAIL="<a test address>" # sent as X-User-Email; required
 #   docker compose up -d
 #   ./run.sh
 #   docker compose down -v
@@ -43,6 +44,10 @@ bad()  { echo "  ❌ $1"; fail=$((fail+1)); }
 # ---- guard: a REAL license is mandatory; demo creds are refused -------------
 LICENSE="${AXONFLOW_LICENSE_KEY:-}"
 ORG="${AXONFLOW_ORG_ID:-}"
+if [ -z "${AXONFLOW_LEADER_EMAIL:-}" ]; then
+  echo "FATAL: AXONFLOW_LEADER_EMAIL must be set (a test address; the proxy sends it as X-User-Email)." >&2
+  exit 1
+fi
 if [ -z "$LICENSE" ] || [ -z "$ORG" ]; then
   echo "FATAL: AXONFLOW_LICENSE_KEY and AXONFLOW_ORG_ID must be set to a REAL Ed25519" >&2
   echo "       Enterprise license + its org id. This harness does NOT ship demo creds." >&2
@@ -85,7 +90,7 @@ drive() {
     AXONFLOW_TENANT_ID="$ORG" \
     AXONFLOW_BACKENDS="$BACKENDS" \
     AXONFLOW_AUDIT_LOG="$audit" \
-    AXONFLOW_LEADER_EMAIL="ben.jonathan@bukuwarung.test" \
+    AXONFLOW_LEADER_EMAIL="${AXONFLOW_LEADER_EMAIL:?set AXONFLOW_LEADER_EMAIL}" \
     AXONFLOW_FAIL_MODE="closed" \
     AXONFLOW_REDACT_RESPONSES="always" \
     AXONFLOW_DECIDE_TIMEOUT="8s" \
