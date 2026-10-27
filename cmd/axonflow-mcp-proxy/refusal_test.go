@@ -4,9 +4,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -129,6 +131,29 @@ func TestResponseGovernanceRefusalDoesNotReflectProtectedContent(t *testing.T) {
 	}
 	if !strings.Contains(got, "HTTP 400") {
 		t.Fatalf("response-governance refusal lost actionable status: %q", got)
+	}
+}
+
+func TestResponseGovernance5xxDoesNotLogProtectedContent(t *testing.T) {
+	const sentinel = "secret-card-5555555555554444"
+	var captured bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&captured)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	pdp := newRawPDP()
+	defer pdp.server.Close()
+	pdp.decideStatus = http.StatusOK
+	pdp.decideBody = `{"verdict":"allow","decision_id":"dec-ok","trace_id":"` + strings.Repeat("f", 32) + `","obligations":[],"evaluated_policies":[]}`
+	pdp.coStatus = http.StatusServiceUnavailable
+	pdp.coBody = `{"error":"upstream reflected ` + sentinel + `"}`
+
+	e, _ := callThrough(t, pdp, false)
+	if e.Code != codePolicyUnavailable {
+		t.Fatalf("got code %d, want %d", e.Code, codePolicyUnavailable)
+	}
+	if strings.Contains(captured.String(), sentinel) {
+		t.Fatalf("response-governance 5xx reflected protected content into log: %q", captured.String())
 	}
 }
 

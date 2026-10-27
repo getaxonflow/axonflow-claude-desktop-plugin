@@ -132,12 +132,16 @@ func TestPlantedPositive(t *testing.T) {
 
 func TestEquivalentSpellingsCannotBypassTheGuard(t *testing.T) {
 	cases := map[string]string{
-		"quoted grep":         "set -o pipefail\nprintf x | \"grep\" -q x\n",
-		"quoted pipefail":     "set -o \"pipefail\"\nprintf x | grep -q x\n",
-		"leading redirection": "set -o pipefail\nprintf x | 2>/dev/null grep -q x\n",
-		"timeout long option": "set -o pipefail\nprintf x | timeout --signal KILL 5 grep -q x\n",
-		"sudo long option":    "set -o pipefail\nprintf x | sudo --user nobody grep -q x\n",
-		"env long option":     "set -o pipefail\nprintf x | env --unset FOO grep -q x\n",
+		"quoted grep":            "set -o pipefail\nprintf x | \"grep\" -q x\n",
+		"quoted pipefail":        "set -o \"pipefail\"\nprintf x | grep -q x\n",
+		"leading redirection":    "set -o pipefail\nprintf x | 2>/dev/null grep -q x\n",
+		"split redirection":      "set -o pipefail\nprintf x | 2> /dev/null grep -q x\n",
+		"descriptor duplication": "set -o pipefail\nprintf x | 2>&1 grep -q x\n",
+		"both-stream redirect":   "set -o pipefail\nprintf x | &>/dev/null grep -q x\n",
+		"allocated fd redirect":  "set -o pipefail\nprintf x | {err}>/dev/null grep -q x\n",
+		"timeout long option":    "set -o pipefail\nprintf x | timeout --signal KILL 5 grep -q x\n",
+		"sudo long option":       "set -o pipefail\nprintf x | sudo --user nobody grep -q x\n",
+		"env long option":        "set -o pipefail\nprintf x | env --unset FOO grep -q x\n",
 	}
 	for name, script := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -254,25 +254,27 @@ var commandWrappers = map[string]commandWrapper{
 	"timeout": {takes: 1, valueOpts: []string{"-s", "-k", "--signal", "--kill-after"}},
 }
 
-var redirectionRe = regexp.MustCompile(`^[0-9]*(?:>>?|<<?|<>|>&|<&)(.*)$`)
+var redirectionRe = regexp.MustCompile(`^(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})?(?:&>>?|>&|<&|>\||>>|<<|<>|>|<)(.*)$`)
 
 func isEarlyExitGrep(words []string) bool {
 	k := 0
 	for k < len(words) {
-		w := strings.TrimLeft(words[k], "({!")
+		w := words[k]
+		if redirectionRe.MatchString(w) {
+			m := redirectionRe.FindStringSubmatch(w)
+			k++
+			if m[1] == "" && k < len(words) {
+				k++
+			}
+			continue
+		}
+		w = strings.TrimLeft(w, "({!")
 		switch {
 		case w == "":
 			k++ // `{`, `(`, `!` on their own
 			continue
 		case assignRe.MatchString(w):
 			k++
-			continue
-		case redirectionRe.MatchString(w):
-			m := redirectionRe.FindStringSubmatch(w)
-			k++
-			if m[1] == "" && k < len(words) {
-				k++
-			}
 			continue
 		}
 		name := strings.TrimPrefix(w, "\\")
@@ -343,8 +345,15 @@ func findingLines(src string) []int {
 				j++
 			}
 			var text strings.Builder
-			for j < len(chars) && !strings.ContainsRune(";|&\n)", rune(chars[j].c)) {
-				text.WriteByte(chars[j].c)
+			for j < len(chars) {
+				ch := chars[j].c
+				ampersandInRedirection := ch == '&' &&
+					((j+1 < len(chars) && chars[j+1].c == '>') ||
+						(j > 0 && (chars[j-1].c == '>' || chars[j-1].c == '<')))
+				if strings.ContainsRune(";|&\n)", rune(ch)) && !ampersandInRedirection {
+					break
+				}
+				text.WriteByte(ch)
 				j++
 			}
 			if isEarlyExitGrep(strings.Fields(text.String())) {

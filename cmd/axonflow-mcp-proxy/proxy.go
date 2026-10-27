@@ -501,7 +501,9 @@ func (p *Proxy) redactionFailClosed(id json.RawMessage, out callOutcome, err err
 		out.response = errorResponse(id, codePolicyUnavailable, responseGovernanceRefusalMessage(ce)+"; response not forwarded (fail-closed)")
 		return out
 	}
-	logStderr("response governance unavailable — failing closed (response NOT forwarded): %v", err)
+	// Do not log err here. Non-4xx check-output errors may also contain the
+	// remote response body, which can reflect the unredacted tool result.
+	logStderr("response governance unavailable — failing closed (response NOT forwarded)")
 	out.response = errorResponse(id, codePolicyUnavailable, "response governance unavailable; response not forwarded (fail-closed)")
 	return out
 }
