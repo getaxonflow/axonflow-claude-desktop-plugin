@@ -6,6 +6,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-27
+
+### Fixed
+
+- A policy deny now shows every reason returned by AxonFlow, in order, instead
+  of showing only the first reason code.
+- Platform refusals now name their cause without changing the fail-closed
+  contract: credential, tier-limit, rate-limit, endpoint, and organization
+  errors remain JSON-RPC `-32003` and are never forwarded under either fail
+  mode. A quota no longer reads like an expired credential.
+- A `/decide` error envelope carrying `verdict: deny` is no longer rendered as
+  a policy decision, and a check-output 403 is treated as a policy block only
+  when its body is an output decision.
+- The CLI harness now requires its organization and leader identity instead of
+  silently using repository-specific defaults.
+
 ## [0.4.0] - 2026-09-05
 
 ### Added
