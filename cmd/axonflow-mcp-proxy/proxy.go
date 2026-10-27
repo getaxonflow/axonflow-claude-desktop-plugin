@@ -495,8 +495,10 @@ func (p *Proxy) redactionFailClosed(id json.RawMessage, out callOutcome, err err
 		return out
 	}
 	if ce, ok := asClientError(err); ok {
-		logStderr("response governance refused the check — failing closed (response NOT forwarded): %v", err)
-		out.response = errorResponse(id, codePolicyUnavailable, refusalMessage("response governance", ce)+"; response not forwarded (fail-closed)")
+		// Never log or return ce.Body here: check-output has just received the
+		// unredacted tool result, and an upstream error may reflect it.
+		logStderr("response governance refused the check (HTTP %d) — failing closed (response NOT forwarded)", ce.StatusCode)
+		out.response = errorResponse(id, codePolicyUnavailable, responseGovernanceRefusalMessage(ce)+"; response not forwarded (fail-closed)")
 		return out
 	}
 	logStderr("response governance unavailable — failing closed (response NOT forwarded): %v", err)

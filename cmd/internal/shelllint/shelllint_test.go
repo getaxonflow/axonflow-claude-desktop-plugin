@@ -130,6 +130,32 @@ func TestPlantedPositive(t *testing.T) {
 	}
 }
 
+func TestEquivalentSpellingsCannotBypassTheGuard(t *testing.T) {
+	cases := map[string]string{
+		"quoted grep":         "set -o pipefail\nprintf x | \"grep\" -q x\n",
+		"quoted pipefail":     "set -o \"pipefail\"\nprintf x | grep -q x\n",
+		"leading redirection": "set -o pipefail\nprintf x | 2>/dev/null grep -q x\n",
+		"timeout long option": "set -o pipefail\nprintf x | timeout --signal KILL 5 grep -q x\n",
+		"sudo long option":    "set -o pipefail\nprintf x | sudo --user nobody grep -q x\n",
+		"env long option":     "set -o pipefail\nprintf x | env --unset FOO grep -q x\n",
+	}
+	for name, script := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "bypass.sh"), []byte(script), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			res, err := Scan(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Findings) != 1 || res.Findings[0].Line != 2 {
+				t.Fatalf("equivalent spelling bypassed the guard: %+v", res.Findings)
+			}
+		})
+	}
+}
+
 // The repository's own shell: every script in scope, and no finding.
 func TestRepositoryShellHasNoGrepQUnderPipefail(t *testing.T) {
 	_, here, _, _ := runtime.Caller(0)

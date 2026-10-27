@@ -48,6 +48,27 @@ func refusalMessage(subject string, ce *clientError) string {
 	}
 }
 
+// responseGovernanceRefusalMessage deliberately does not inspect ce.Body.
+// The check-output request contains the still-unredacted backend result, so an
+// upstream error body may reflect protected content. Returning or logging that
+// body would route the content around the output-governance boundary that just
+// failed closed. Status and a numeric Retry-After remain safe and actionable.
+func responseGovernanceRefusalMessage(ce *clientError) string {
+	retry := limitSuffix("", "", ce.RetryAfter)
+	switch ce.StatusCode {
+	case 401:
+		return "response governance rejected the proxy's credentials (HTTP 401). Check AXONFLOW_CLIENT_ID, AXONFLOW_CLIENT_SECRET and AXONFLOW_USER_TOKEN"
+	case 402:
+		return fmt.Sprintf("response governance refused the check: a tier limit was reached (HTTP 402%s)", retry)
+	case 429:
+		return fmt.Sprintf("response governance refused the check: a rate limit was reached (HTTP 429%s)", retry)
+	case 404, 405:
+		return fmt.Sprintf("response governance rejected the check (HTTP %d). Check AXONFLOW_ENDPOINT: it may not point at an AxonFlow agent that serves this route", ce.StatusCode)
+	default:
+		return fmt.Sprintf("response governance rejected the check (HTTP %d%s)", ce.StatusCode, retry)
+	}
+}
+
 // platformErrorText reads the platform's words from an error body, which comes
 // in three shapes on the routes this proxy calls: `{"error": "..."}` (a
 // DecideErrorResponse, a handler-written error, a RateLimitEnvelope),

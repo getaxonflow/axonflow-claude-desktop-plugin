@@ -19,6 +19,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 - A `/decide` error envelope carrying `verdict: deny` is no longer rendered as
   a policy decision, and a check-output 403 is treated as a policy block only
   when its body is an output decision.
+- Output-governance refusal messages now use fixed local text and never quote
+  the upstream error body, preventing an error response from reflecting an
+  unredacted tool result into Claude or the extension log.
 - The CLI harness now requires its organization and leader identity instead of
   silently using repository-specific defaults.
 

@@ -84,6 +84,22 @@ func codeOf(src string) []codeChar {
 		strip bool
 	}
 	var pending []heredoc
+	// A quoted shell word has the same command/option spelling after quote
+	// removal. Preserve simple word characters so `"grep"` and
+	// `set -o "pipefail"` cannot hide from the scanner, while metacharacters
+	// inside quoted data remain blank and can never become shell syntax here.
+	appendSimpleQuotedWord := func(body string, atLine int) bool {
+		for _, c := range []byte(body) {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || strings.ContainsRune("_./-", rune(c))) {
+				return false
+			}
+		}
+		for _, c := range []byte(body) {
+			out = append(out, codeChar{c, atLine})
+		}
+		return true
+	}
 	for i := 0; i < len(src); {
 		c := src[i]
 		if c == '\n' {
@@ -157,10 +173,19 @@ func codeOf(src string) []codeChar {
 			} else {
 				body, i = src[i+1:i+1+end], i+end+2
 			}
+			if !appendSimpleQuotedWord(body, line) {
+				out = append(out, codeChar{' ', line})
+			}
 			line += strings.Count(body, "\n")
-			out = append(out, codeChar{' ', line})
 			continue
 		case c == '"':
+			if end := strings.IndexByte(src[i+1:], '"'); end >= 0 {
+				body := src[i+1 : i+1+end]
+				if appendSimpleQuotedWord(body, line) {
+					i += end + 2
+					continue
+				}
+			}
 			stack = append(stack, "dquote")
 			out = append(out, codeChar{' ', line})
 			i++
@@ -222,12 +247,14 @@ type commandWrapper struct {
 
 var commandWrappers = map[string]commandWrapper{
 	"command": {}, "exec": {}, "nohup": {}, "time": {},
-	"env":     {valueOpts: []string{"-u", "-C", "-S"}},
-	"nice":    {valueOpts: []string{"-n"}},
-	"stdbuf":  {valueOpts: []string{"-i", "-o", "-e"}},
-	"sudo":    {valueOpts: []string{"-u", "-g", "-C", "-h", "-p"}},
-	"timeout": {takes: 1, valueOpts: []string{"-s", "-k"}},
+	"env":     {valueOpts: []string{"-u", "-C", "-S", "--unset", "--chdir", "--split-string"}},
+	"nice":    {valueOpts: []string{"-n", "--adjustment"}},
+	"stdbuf":  {valueOpts: []string{"-i", "-o", "-e", "--input", "--output", "--error"}},
+	"sudo":    {valueOpts: []string{"-u", "-g", "-C", "-h", "-p", "--user", "--group", "--close-from", "--host", "--prompt"}},
+	"timeout": {takes: 1, valueOpts: []string{"-s", "-k", "--signal", "--kill-after"}},
 }
+
+var redirectionRe = regexp.MustCompile(`^[0-9]*(?:>>?|<<?|<>|>&|<&)(.*)$`)
 
 func isEarlyExitGrep(words []string) bool {
 	k := 0
@@ -239,6 +266,13 @@ func isEarlyExitGrep(words []string) bool {
 			continue
 		case assignRe.MatchString(w):
 			k++
+			continue
+		case redirectionRe.MatchString(w):
+			m := redirectionRe.FindStringSubmatch(w)
+			k++
+			if m[1] == "" && k < len(words) {
+				k++
+			}
 			continue
 		}
 		name := strings.TrimPrefix(w, "\\")
