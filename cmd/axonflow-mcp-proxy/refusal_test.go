@@ -4,9 +4,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -114,6 +116,44 @@ func TestRefusalMessage_EachStatusNamesItsCause(t *testing.T) {
 				t.Fatalf("refusalMessage:\n got: %s\nwant: %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResponseGovernanceRefusalDoesNotReflectProtectedContent(t *testing.T) {
+	const sentinel = "secret-card-4111111111111111"
+	ce := &clientError{
+		StatusCode: http.StatusBadRequest,
+		Body:       `{"error":"invalid message: ` + sentinel + `"}`,
+	}
+	got := responseGovernanceRefusalMessage(ce)
+	if strings.Contains(got, sentinel) || strings.Contains(got, "invalid message") {
+		t.Fatalf("response-governance refusal reflected protected content: %q", got)
+	}
+	if !strings.Contains(got, "HTTP 400") {
+		t.Fatalf("response-governance refusal lost actionable status: %q", got)
+	}
+}
+
+func TestResponseGovernance5xxDoesNotLogProtectedContent(t *testing.T) {
+	const sentinel = "secret-card-5555555555554444"
+	var captured bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&captured)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	pdp := newRawPDP()
+	defer pdp.server.Close()
+	pdp.decideStatus = http.StatusOK
+	pdp.decideBody = `{"verdict":"allow","decision_id":"dec-ok","trace_id":"` + strings.Repeat("f", 32) + `","obligations":[],"evaluated_policies":[]}`
+	pdp.coStatus = http.StatusServiceUnavailable
+	pdp.coBody = `{"error":"upstream reflected ` + sentinel + `"}`
+
+	e, _ := callThrough(t, pdp, false)
+	if e.Code != codePolicyUnavailable {
+		t.Fatalf("got code %d, want %d", e.Code, codePolicyUnavailable)
+	}
+	if strings.Contains(captured.String(), sentinel) {
+		t.Fatalf("response-governance 5xx reflected protected content into log: %q", captured.String())
 	}
 }
 
@@ -346,17 +386,17 @@ func TestEnforce_CheckOutputRefusalsAreNamed(t *testing.T) {
 	}{
 		{"403 decision is a block", 403, wireCheckOutput403Block, nil, codePolicyDeny, "explicit_constraint"},
 		{"403 feature_pro_only is a tier limit, not a block", 403, wireFeatureProOnly403, nil, codePolicyUnavailable,
-			`response governance refused the request: a tier limit was reached (HTTP 403, limit_type "feature_pro_only"): LLM cost pre-flight is a Pro feature — see what a multi-step plan will cost before it runs.; response not forwarded (fail-closed)`},
+			"response governance rejected the check (HTTP 403); response not forwarded (fail-closed)"},
 		{"403 without allowed is not a block", 403, `{"error":"tenant mismatch"}`, nil, codePolicyUnavailable,
-			"response governance rejected the request (HTTP 403): tenant mismatch; response not forwarded (fail-closed)"},
+			"response governance rejected the check (HTTP 403); response not forwarded (fail-closed)"},
 		{"401 middleware JSONError", 401, wireJSONError401, nil, codePolicyUnavailable,
-			"response governance rejected the proxy's credentials (HTTP 401): invalid user token. Check AXONFLOW_CLIENT_ID, AXONFLOW_CLIENT_SECRET and AXONFLOW_USER_TOKEN; response not forwarded (fail-closed)"},
+			"response governance rejected the proxy's credentials (HTTP 401). Check AXONFLOW_CLIENT_ID, AXONFLOW_CLIENT_SECRET and AXONFLOW_USER_TOKEN; response not forwarded (fail-closed)"},
 		{"401 handler string error", 401, `{"success":false,"error":"user_token_rejected"}`, nil, codePolicyUnavailable,
-			"response governance rejected the proxy's credentials (HTTP 401): user_token_rejected. Check AXONFLOW_CLIENT_ID, AXONFLOW_CLIENT_SECRET and AXONFLOW_USER_TOKEN; response not forwarded (fail-closed)"},
+			"response governance rejected the proxy's credentials (HTTP 401). Check AXONFLOW_CLIENT_ID, AXONFLOW_CLIENT_SECRET and AXONFLOW_USER_TOKEN; response not forwarded (fail-closed)"},
 		{"429 plain with Retry-After", 429, wirePerMinute429, map[string]string{"Retry-After": "30"}, codePolicyUnavailable,
-			"response governance refused the request: a rate limit was reached (HTTP 429, retry after 30 s): Rate limit exceeded (60 req/min). Try again shortly.; response not forwarded (fail-closed)"},
+			"response governance refused the check: a rate limit was reached (HTTP 429, retry after 30 s); response not forwarded (fail-closed)"},
 		{"400 measured", 400, wireCheckOutput400, nil, codePolicyUnavailable,
-			"response governance rejected the request (HTTP 400): Invalid request body; response not forwarded (fail-closed)"},
+			"response governance rejected the check (HTTP 400); response not forwarded (fail-closed)"},
 		{"5xx stays unavailable", 503, `{"error":"down"}`, nil, codePolicyUnavailable,
 			"response governance unavailable; response not forwarded (fail-closed)"},
 	}
