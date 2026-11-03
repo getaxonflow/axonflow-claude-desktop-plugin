@@ -6,6 +6,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+
+- Explain verified Hosted Starter signup and the separate Portal-linked API credential for the Desktop extension; keep governed calls fail-closed.
+
 ## [0.4.1] - 2026-10-27
 
 ### Fixed

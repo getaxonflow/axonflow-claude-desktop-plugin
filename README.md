@@ -23,6 +23,12 @@ conversation, and **audit** everything.
 That's it. Every `tools/call` is now checked against AxonFlow Decision Mode
 before it runs.
 
+### Hosted Starter account and credential
+
+For Hosted Starter, begin at [the Hosted account page](https://portal.try.getaxonflow.com/hosted/start): verify your email, review the plan, and activate the account. In the Portal, download the Hosted API link command, run it locally, and approve its code from your signed-in owner session. It saves a separate revocable client credential in a protected `~/.config/axonflow/hosted-api.json` file. The Desktop proxy does not create a Hosted tenant or call anonymous `/api/v1/register`.
+
+In the Desktop Extension configuration, set **AxonFlow endpoint** from the file's `endpoint` (normally `https://try.getaxonflow.com`), **Client ID** and **Tenant ID** to its `tenant_id`, and **Client secret** to its `secret`. Leave Org ID empty unless your deployment owner instructs otherwise. Keep Fail mode `closed` and Response redaction `always` for governed Hosted use. Do not enter your Portal password or a Stripe value as the client secret. A 402 payment refusal or 429 allowance refusal blocks the tool call; resolve the plan or allowance in the Portal before retrying. Use one linked credential per installation so the owner can revoke it independently.
+
 **Desktop proxy setup & usage walkthrough** — install the governance proxy and see PII redaction + tool-call governance on a real MCP backend: [Watch on YouTube](https://youtu.be/_dlnX_xLYmU)
 
 ## Why a proxy, not a hook
