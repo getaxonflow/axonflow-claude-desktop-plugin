@@ -96,8 +96,8 @@ not the proxy:
 
 ## Configuration
 
-Configured entirely through the Desktop Extension UI, which maps to these
-environment variables (see `manifest.json`):
+The Desktop Extension UI maps these fields to proxy environment variables
+(see `manifest.json`):
 
 | Field | Env var | Notes |
 |---|---|---|
@@ -106,11 +106,17 @@ environment variables (see `manifest.json`):
 | User token (JWT) | `AXONFLOW_USER_TOKEN` | optional; enterprise validated-user audit — an admin-minted per-user token (see below) |
 | Tenant / Org | `AXONFLOW_TENANT_ID` / `AXONFLOW_ORG_ID` | |
 | Fail mode | `AXONFLOW_FAIL_MODE` | `closed` (default) or `open` — request plane only; response redaction is always fail-closed |
-| Response redaction | `AXONFLOW_REDACT_RESPONSES` | `always` (default) · `on-obligation` (legacy: only on a `redact_pii` obligation / fail-open forward) · `off` (explicit opt-out footgun — disables the whole response-governance call, i.e. PII redaction **and** response-side SQLi/exfil hard-blocks) |
-| Capability handshake | `AXONFLOW_PEP_AUDIENCE` | unset (default) sends no header and changes nothing · set to the audience your decision proofs are bound to, and the proxy declares what it can enforce on every governed call. See "Declaring what this proxy can enforce" below. A malformed value makes the proxy refuse to start. |
 | Leader email | `AXONFLOW_LEADER_EMAIL` | stamped on the proxy's local Layer-1 audit rows; asserted to the platform as `X-User-Email` — attributed into the platform audit trail only under the trust gate (see above) |
 | Backend servers file | `AXONFLOW_BACKENDS_FILE` | JSON map — see `config.example.json` |
 | Audit log path | `AXONFLOW_AUDIT_LOG` | optional JSONL sink |
+
+The proxy also supports these environment options. They are not Desktop
+Extension UI fields; set them in the proxy's environment if needed:
+
+| Option | Env var | Notes |
+|---|---|---|
+| Response redaction | `AXONFLOW_REDACT_RESPONSES` | `always` (default) · `on-obligation` (legacy: only on a `redact_pii` obligation / fail-open forward) · `off` (explicit opt-out footgun — disables the whole response-governance call, i.e. PII redaction **and** response-side SQLi/exfil hard-blocks) |
+| Capability handshake | `AXONFLOW_PEP_AUDIENCE` | unset (default) sends no header and changes nothing · set to the audience your decision proofs are bound to, and the proxy declares what it can enforce on every governed call. See "Declaring what this proxy can enforce" below. A malformed value makes the proxy refuse to start. |
 
 ### User token (`AXONFLOW_USER_TOKEN`): per-user validated attribution
 
